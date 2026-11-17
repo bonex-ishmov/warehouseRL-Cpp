@@ -2,6 +2,8 @@
 """Genera docs/RESULTADOS.md comparando políticas a partir de los resumen.json de wrl_evaluate.
 
 Uso: python3 tools/reporte.py results/eval_dwa results/eval_sac [...] > docs/RESULTADOS.md
+     Cada carpeta puede llevar una etiqueta (carpeta=etiqueta) para distinguir modelos de la
+     misma política: results/eval_sac_v12="SAC v12" results/eval_sac_v10="SAC v10".
 """
 import json
 import sys
@@ -22,10 +24,11 @@ COLS = [
 
 def main(dirs):
     data = {}
-    for d in dirs:
+    for arg in dirs:
+        d, _, label = arg.partition("=")
         rep = json.loads((Path(d) / "resumen.json").read_text())
         for scenario, body in rep.items():
-            data.setdefault(scenario, []).append((body["politica"], body))
+            data.setdefault(scenario, []).append((label or body["politica"], body))
 
     print("# Resultados de evaluación\n")
     print("Generado con `tools/reporte.py` a partir de `wrl_evaluate` "

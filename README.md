@@ -96,7 +96,7 @@ Opciones útiles:
 # 5. Interfaz gráfica: ver y comparar agentes entrenados (por defecto, SAC frente a A* + DWA en E1)
 ./build/wrl_gui
 ./build/wrl_gui --scenario configs/scenarios/e4_dinamico.json \
-    --agent sac:models/sac_final.pt --agent sac:models/sac_v9.pt --agent dwa
+    --agent sac:models/sac_final.pt --agent sac:models/sac_v10.pt --agent dwa
 
 # 6. Visor sencillo, reproducción de trazas y capturas
 ./build/wrl_viewer --scenario configs/scenarios/demo_mapa_fijo.json            # conducción manual
@@ -275,6 +275,25 @@ completadas y eligió un modelo con 64 % de incidentes de carga en E1.
 3. **Validación con seguridad** (ver "Mejor modelo por validación") y con 10 episodios
    por escenario en vez de 4, que hacían saltar E5 ±25 puntos entre validaciones.
 
+**Resultado del v12** (`mejor_validacion.pt` a los 11.6 M de transiciones, 100 episodios
+por escenario): recupera y supera la tasa de completadas del v10 (E5: 80 % → 89 %, E6:
+89 % → 93 %, E7: 83 % → 86 %, E4: 95 % → 98 %) con menos choques graves con operarios
+(E4–E7: 38 → 21; E5: 14 → 5) y menos roces (E5: 6.1 → 5.0 por episodio). A cambio entrega
+a tiempo algo menos (E5: 54 % → 48 %, E6: 66 % → 53 %): conduce más prudente y ~10 % de
+los episodios de E5–E7 acaban por tiempo máximo. E7 (física alterada, fuera de
+entrenamiento) no mejora en choques graves con operarios (10 → 12). `wrl_collisions` en E5
+y E7 muestra que:
+
+- la percepción sigue sin ser el problema (el obstáculo estaba en la observación y lo
+  tocaban rayos del LiDAR en el 91–100 % de los choques graves un segundo antes);
+- en los choques graves con operarios el robot casi siempre estaba frenando, y en la
+  mitad se acercaban los dos a la vez (operario a ~0.5 m/s en un cruce lateral);
+- los choques graves contra estanterías (~0.13 por episodio) son a ~1.1 m/s y siempre
+  culpa del robot: es lo que más margen de mejora deja.
+
+El modelo final del entrenamiento (15 M) completa solo 72 % en E5: la validación con
+seguridad es la que encuentra el buen punto.
+
 **Compatibilidad:** los modelos de 77 observaciones (v9, v10) siguen funcionando: la
 política detecta el tamaño del modelo y le da la observación en su formato
 (`WarehouseEnv::toLegacyObservation`). Evaluado así, el v10 da lo mismo que con su código
@@ -374,26 +393,33 @@ Mediciones alternando ejecuciones:
 ## Resultados
 
 Ver `docs/RESULTADOS.md` (tablas generadas con `tools/reporte.py` a partir de
-`wrl_evaluate`). El modelo entregado (`models/sac_final.pt`, v10, elegido por validación
-en E1–E5) frente a la línea base A* + DWA, 100 episodios por escenario:
+`wrl_evaluate`). El modelo entregado (`models/sac_final.pt`, v12, elegido por la
+validación con seguridad) frente a la línea base A* + DWA y al modelo anterior
+(`models/sac_v10.pt`), 100 episodios por escenario, todos evaluados con el código actual:
 
-| Escenario | Completadas DWA | Completadas SAC | A tiempo DWA | A tiempo SAC |
-|---|---|---|---|---|
-| E1 básico | 98.0 % | **100 %** | 98.0 % | **100 %** |
-| E2 energía | 95.2 % | **100 %** | 95.2 % | **100 %** |
-| E3 priorización | 94.3 % | **98.4 %** | 83.7 % | **98.1 %** |
-| E4 dinámico | **95.2 %** | 94.8 % | **95.2 %** | 94.8 % |
-| E5 combinado | **87.2 %** | 78.3 % | 50.3 % | **52.0 %** |
-| E6 generalización* | **95.9 %** | 91.1 % | 61.6 % | **66.3 %** |
-| E7 robustez física* | **90.8 %** | 82.9 % | 51.7 % | **57.7 %** |
+| Escenario | Completadas DWA | SAC v12 | SAC v10 | A tiempo DWA | SAC v12 | SAC v10 |
+|---|---|---|---|---|---|---|
+| E1 básico | 98.0 % | **100 %** | **100 %** | 98.0 % | **100 %** | **100 %** |
+| E2 energía | 95.2 % | **100 %** | **100 %** | 95.2 % | **100 %** | **100 %** |
+| E3 priorización | 94.3 % | 96.8 % | **98.4 %** | 83.7 % | 91.0 % | **98.1 %** |
+| E4 dinámico | 95.2 % | **98.0 %** | 95.2 % | 95.2 % | **98.0 %** | 95.2 % |
+| E5 combinado | 87.3 % | **89.3 %** | 80.3 % | 50.7 % | 47.9 % | **54.0 %** |
+| E6 generalización* | **95.9 %** | 93.1 % | 89.3 % | 61.8 % | 52.6 % | **65.5 %** |
+| E7 robustez física* | **88.1 %** | 86.3 % | 82.9 % | 49.2 % | 46.1 % | **57.4 %** |
+
+| Seguridad (E4 / E5 / E6 / E7) | DWA | SAC v12 | SAC v10 |
+|---|---|---|---|
+| Choques graves con operarios (en 100 episodios) | 1 / 0 / 0 / 1 | 2 / 5 / 2 / 12 | 9 / 14 / 5 / 10 |
+| Incidentes de carga por entrega | 2.1 / 1.6 / 0.6 / 1.6 % | 15.7 / 10.6 / 9.8 / 11.4 % | 16.8 / 9.8 / 11.1 / 9.4 % |
+| Roces por episodio | 0.3 / 1.0 / 0.3 / 1.3 | 1.8 / 5.0 / 2.4 / 3.9 | 1.8 / 6.1 / 3.5 / 4.9 |
 
 \* Fuera de la distribución de entrenamiento y de validación.
 
-SAC entrega antes y a tiempo más a menudo en todos los escenarios con plazos, pero
-**todavía choca más**: colisiones graves con operarios en E4–E7 (DWA casi ninguna) y
-~9–14 % de incidentes de carga frente a < 2 %. En E5 un tercio de los episodios fallidos
-siguen terminando por estancamiento. `models/sac_v9.pt` (antes de corregir la
-recompensa) completaba 32 % en E5, 58 % en E6 y 38 % en E7.
+SAC v12 completa más tareas que DWA en E1–E5 y entrega más rápido, pero **sigue chocando
+más**: choques graves con operarios (sobre todo en E7) e incidentes de carga en torno al
+10 % frente a < 2 %. Frente al v10, el v12 cambia puntualidad por seguridad y tareas
+completadas. `models/sac_v9.pt` (antes de corregir la recompensa) completaba 32 % en E5,
+58 % en E6 y 38 % en E7.
 
 ## Diferencias con la propuesta
 
