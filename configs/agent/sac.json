@@ -15,7 +15,7 @@
     "threads": 6,              // hilos de simulación (1 por núcleo físico; el resto queda para Torch y el sistema)
     "totalSteps": 15000000,    // transiciones
     "updatesPerTransition": 0.25,
-    "replayCapacity": 1000000, // ~600 MB en la GPU con 77 observaciones
+    "replayCapacity": 1000000, // ~650 MB en la GPU con 86 observaciones
     "warmupSteps": 20000,
     "warmupPolicy": "dwa",     // "dwa" (demostraciones de la línea base con ruido) o "random"
     "warmupNoise": 0.3,
@@ -41,8 +41,12 @@
   // Validación con semillas fijas; decide qué modelo se guarda como mejor_validacion.pt.
   // E6 y E7 quedan fuera: miden generalización y robustez solo en la evaluación final.
   "validation": {
-    "every": 300000,
-    "episodesPerScenario": 4,
+    "every": 400000,
+    // 10 episodios por escenario: con 4, E5 saltaba ±25 puntos entre validaciones.
+    "episodesPerScenario": 10,
+    // Puntaje por escenario = completadas − 0.5·graves con operario/ep − 0.5·incidentes de
+    // carga por entrega − 0.02·choques dañinos/ep (elige modelos seguros, no solo rápidos).
+    "workerSevereWeight": 0.5, "loadIncidentWeight": 0.5, "harmfulCollisionWeight": 0.02,
     "scenarios": [
       "../scenarios/e1_basico.json", "../scenarios/e2_energia.json", "../scenarios/e3_priorizacion.json",
       "../scenarios/e4_dinamico.json", "../scenarios/e5_combinado.json"

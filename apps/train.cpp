@@ -52,7 +52,7 @@ T value(const Json& j, const char* key, T def) {
 void usage() {
     std::puts(
         "Uso: wrl_train [--config configs/agent/sac.json] [--out runs/nombre] [--steps N] [--envs N]\n"
-        "               [--threads N] [--device auto|cuda|cpu] [--resume modelo.pt]\n"
+        "               [--threads N] [--device auto|cuda|cpu] [--resume modelo.pt]   (sin CUDA hay que pedir --device cpu)\n"
         "               [--scenario archivo.json]   entrenar en un escenario fijo, sin generador\n"
         "               [--validate-every N]        transiciones entre validaciones\n"
         "               [--blocking-wait]           esperar a la GPU sin ocupar un núcleo (~2.6 % más lento)");
@@ -84,15 +84,22 @@ Difficulty levelsFromJson(const Json& j) {
 /// Validación con semillas fijas: la política determinista en escenarios de
 /// referencia. Es lo que decide qué modelo se guarda como el mejor, en lugar de
 /// la tasa del propio entrenamiento (que mezcla dificultades y exploración).
+///
+/// El puntaje no es solo completar: con la tasa de completadas sola se elegían
+/// modelos rápidos pero peligrosos (v11: 64 % de incidentes de carga en E1). Por
+/// escenario: completadas − wOperario·graves con operario por episodio
+/// − wCarga·incidentes de carga por entrega − wChoque·choques dañinos por episodio.
 struct Validation {
     std::vector<ScenarioConfig> scenarios;
-    int perScenario = 4;
+    int perScenario = 10;
     int threads = 6;
+    double workerSevereWeight = 0.5, loadIncidentWeight = 0.5, harmfulCollisionWeight = 0.02;
 
     struct Result {
         std::vector<MetricsSummary> perScenario;
-        double score = 0.0;  ///< media de la tasa de completadas (cada escenario pesa igual)
-        double onTime = 0.0;
+        std::vector<double> scenarioScore;
+        double score = 0.0;       ///< media del puntaje por escenario (cada escenario pesa igual)
+        double completion = 0.0, onTime = 0.0, workerSevere = 0.0, loadIncidents = 0.0, harmful = 0.0;
     };
 
     Result run(SacAgent& agent) const {
@@ -121,9 +128,19 @@ struct Validation {
         for (size_t s = 0; s < scenarios.size(); ++s) {
             std::vector<EpisodeMetrics> eps(results.begin() + static_cast<std::ptrdiff_t>(s * perScenario),
                                             results.begin() + static_cast<std::ptrdiff_t>((s + 1) * perScenario));
-            r.perScenario.push_back(MetricsSummary::from(eps));
-            r.score += r.perScenario.back().completionRate / static_cast<double>(scenarios.size());
-            r.onTime += r.perScenario.back().onTimeRate / static_cast<double>(scenarios.size());
+            const MetricsSummary m = MetricsSummary::from(eps);
+            const double k = 1.0 / static_cast<double>(scenarios.size());
+            const double severe = m.workerSevere / std::max(1, m.episodes);
+            const double sc = m.completionRate - workerSevereWeight * severe - loadIncidentWeight * m.loadIncidentRate -
+                              harmfulCollisionWeight * m.harmfulCollisionsPerEpisode;
+            r.perScenario.push_back(m);
+            r.scenarioScore.push_back(sc);
+            r.score += k * sc;
+            r.completion += k * m.completionRate;
+            r.onTime += k * m.onTimeRate;
+            r.workerSevere += k * severe;
+            r.loadIncidents += k * m.loadIncidentRate;
+            r.harmful += k * m.harmfulCollisionsPerEpisode;
         }
         return r;
     }
@@ -137,6 +154,7 @@ int main(int argc, char** argv) {
         usage();
         return 0;
     }
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);  // el registro se lee mientras entrena, aunque vaya a un archivo
     const fs::path configPath = args.get("config", std::string(WRL_SOURCE_DIR) + "/configs/agent/sac.json");
     const fs::path configDir = configPath.parent_path();
     const Json cfg = loadJsonWithBase(configPath);
@@ -159,7 +177,16 @@ int main(int argc, char** argv) {
     // Antes de tocar CUDA. Por defecto CUDA espera girando (ocupa un núcleo, ~2.6 %
     // más rápido); --blocking-wait duerme el hilo y deja ese núcleo libre.
     const bool blockingSync = args.has("blocking-wait") && preferBlockingCudaSync();
-    const torch::Device device = resolveDevice(args.get("device", value(tj, "device", std::string("auto"))));
+    const std::string deviceName = args.get("device", value(tj, "device", std::string("auto")));
+    const torch::Device device = resolveDevice(deviceName);
+    // En CPU el entrenamiento es ~10 veces más lento. Si no se pidió a propósito, suele
+    // ser el driver de NVIDIA sin cargar (p. ej. tras actualizar el kernel): mejor parar.
+    if (!device.is_cuda() && deviceName != "cpu") {
+        std::fprintf(stderr,
+                     "CUDA no está disponible: el entrenamiento en CPU es ~10 veces más lento.\n"
+                     "Comprueba el driver de NVIDIA (¿existe /dev/nvidia0?) o usa --device cpu a propósito.\n");
+        return 1;
+    }
 
     const fs::path out = args.get("out", "runs/sac_" + std::to_string(std::time(nullptr)));
     fs::create_directories(out);
@@ -216,7 +243,10 @@ int main(int argc, char** argv) {
 
     Validation validation;
     validation.threads = threads;
-    validation.perScenario = value(vj, "episodesPerScenario", 4);
+    validation.perScenario = value(vj, "episodesPerScenario", 10);
+    validation.workerSevereWeight = value(vj, "workerSevereWeight", 0.5);
+    validation.loadIncidentWeight = value(vj, "loadIncidentWeight", 0.5);
+    validation.harmfulCollisionWeight = value(vj, "harmfulCollisionWeight", 0.02);
     const long validateEvery = static_cast<long>(args.getDouble("validate-every", value(vj, "every", 300000.0)));
     for (const auto& s : vj.value("scenarios", Json::array()))
         validation.scenarios.push_back(loadScenario(configDir / s.get<std::string>()));
@@ -256,7 +286,7 @@ int main(int argc, char** argv) {
     log << ",episodios,retorno_medio,tasa_completadas,colisiones_por_ep,incidentes_carga,"
            "perdida_critico,perdida_actor,alfa,entropia,transiciones_por_s,actualizaciones_por_s\n";
     std::ofstream vlog(out / "validacion.csv");
-    vlog << "transiciones,puntaje,a_tiempo";
+    vlog << "transiciones,puntaje,completadas,a_tiempo,graves_operario_ep,incidentes_carga,choques_ep";
     for (const auto& s : validation.scenarios) vlog << ',' << s.name;
     vlog << ",nivel_medio,mejor\n";
 
@@ -265,7 +295,7 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, onSignal);
     long steps = 0, updates = 0, lastLog = 0, lastCkpt = 0, lastVal = 0, updatesAtLog = 0;
     double updateDebt = 0.0;
-    double bestScore = -1.0, bestOnTime = -1.0;
+    double bestScore = -1e9, bestOnTime = -1.0;
     std::vector<EpisodeMetrics> sinceLog;
     SacLosses last{};
     auto tLog = Clock::now();
@@ -282,11 +312,14 @@ int main(int argc, char** argv) {
             bestOnTime = r.onTime;
             agent.save(out / "mejor_validacion.pt");
         }
-        std::printf("   validación: %.1f%% completadas, %.1f%% a tiempo (", 100 * r.score, 100 * r.onTime);
-        vlog << steps << ',' << r.score << ',' << r.onTime;
+        std::printf("   validación: puntaje %.3f | %.1f%% completadas, %.1f%% a tiempo, %.2f graves con operario/ep, "
+                    "%.1f%% incid. carga, %.2f choques/ep (",
+                    r.score, 100 * r.completion, 100 * r.onTime, r.workerSevere, 100 * r.loadIncidents, r.harmful);
+        vlog << steps << ',' << r.score << ',' << r.completion << ',' << r.onTime << ',' << r.workerSevere << ','
+             << r.loadIncidents << ',' << r.harmful;
         for (size_t s = 0; s < r.perScenario.size(); ++s) {
             std::printf("%s%s %.0f%%", s ? ", " : "", validation.scenarios[s].name.c_str(), 100 * r.perScenario[s].completionRate);
-            vlog << ',' << r.perScenario[s].completionRate;
+            vlog << ',' << r.scenarioScore[s];
         }
         vlog << ',' << curriculum.progress() << ',' << (best ? 1 : 0) << '\n';
         vlog.flush();
@@ -422,8 +455,8 @@ int main(int argc, char** argv) {
     saveLevels();
     validate();
     const double minutes = std::chrono::duration<double>(Clock::now() - tStart).count() / 60.0;
-    std::printf("%s tras %ld transiciones (%.1f min). Modelos: %s (final), %s (mejor validación, %.1f%%)\n",
+    std::printf("%s tras %ld transiciones (%.1f min). Modelos: %s (final), %s (mejor validación, puntaje %.3f)\n",
                 gStop ? "Interrumpido" : "Terminado", steps, minutes, (out / "sac_final.pt").string().c_str(),
-                (out / "mejor_validacion.pt").string().c_str(), 100 * bestScore);
+                (out / "mejor_validacion.pt").string().c_str(), bestScore);
     return 0;
 }

@@ -31,9 +31,75 @@ TEST(Configuracion, ValoresInvalidosSeRechazan) {
 
 TEST(Entorno, TamanoDeLaObservacion) {
     WarehouseEnv env(test::smallScenario());
-    EXPECT_EQ(env.observationSize(), 36 + 26 + 15);
+    EXPECT_EQ(env.observationSize(), 36 + 26 + 3 * 8);
     EXPECT_EQ(static_cast<int>(env.observation().size()), env.observationSize());
     for (float x : env.observation()) EXPECT_TRUE(std::isfinite(x));
+}
+
+// La distancia entre superficies (GJK) debe quedar entre las cotas geométricas que dan
+// los círculos circunscrito e inscrito de cada forma, y los obstáculos salen ordenados.
+TEST(Sensores, DistanciaEntreSuperficiesYTipoDeObstaculo) {
+    const auto cfg = test::repoScenario("e4_dinamico.json");
+    WarehouseEnv env(cfg);
+    env.reset(77);
+    DwaPolicy p;
+    const auto& rp = cfg.robot;
+    int checked = 0, workers = 0, forklifts = 0;
+    for (int i = 0; i < 600 && !env.done(); ++i) {
+        env.step(p.act(env));
+        float prev = -1.0f;
+        for (const auto& o : env.perceived()) {
+            const float center = o.relPos.length();
+            const DynamicObstacle* src = nullptr;
+            for (const auto& d : env.obstacles())
+                if ((d.pos - o.worldPos).lengthSq() < 1e-8f) src = &d;
+            ASSERT_NE(src, nullptr);
+            EXPECT_EQ(o.worker, src->isWorker());
+            const float inner = src->isWorker() ? src->halfExtents.x : std::min(src->halfExtents.x, src->halfExtents.y);
+            const float outer = src->isWorker() ? src->halfExtents.x : src->halfExtents.length();
+            EXPECT_GE(o.gap, 0.0f);
+            EXPECT_LE(o.gap, std::max(0.0f, center - inner - rp.halfWidth) + 1e-3f);
+            EXPECT_GE(o.gap, center - outer - rp.radius() - 1e-3f);
+            EXPECT_GE(o.gap, prev);
+            prev = o.gap;
+            (o.worker ? workers : forklifts)++;
+            ++checked;
+        }
+        float w = 0.0f, f = 0.0f;
+        env.unsafeSpeed(w, f);
+        EXPECT_GE(w, 0.0f);
+        EXPECT_GE(f, 0.0f);
+        if (env.robot().velocity().length() < 1e-3f) {
+            EXPECT_LT(w + f, 1e-3f);  // parado no hay exceso que castigar
+        }
+    }
+    EXPECT_GT(checked, 100);
+    EXPECT_GT(workers, 0);
+    EXPECT_GT(forklifts, 0);
+}
+
+// Los modelos anteriores al v11 (77 observaciones) siguen funcionando: la política
+// recibe la observación en su formato, con los obstáculos ordenados por centro.
+TEST(Entorno, ObservacionCompatibleConModelosAnteriores) {
+    SensorParams sp;  // 36 rayos, 3 obstáculos
+    const int n = WarehouseEnv::observationSize(sp), legacy = WarehouseEnv::legacyObservationSize(sp);
+    ASSERT_EQ(legacy, 36 + 26 + 15);
+    std::vector<float> in(static_cast<size_t>(n)), out(static_cast<size_t>(legacy), -9.0f);
+    for (int i = 0; i < n; ++i) in[static_cast<size_t>(i)] = 0.001f * static_cast<float>(i);
+    const int head = sp.lidarRays + 20, k = WarehouseEnv::kPerObstacle;
+    // Obstáculo 0 lejos (centro), 1 cerca, 2 ausente.
+    float* o = in.data() + head;
+    o[0] = 0.5f, o[1] = 0.0f, o[4] = 1.0f;
+    o[k + 0] = 0.1f, o[k + 1] = 0.1f, o[k + 4] = 1.0f;
+    for (int j = 0; j < k; ++j) o[2 * k + j] = 0.0f;
+    WarehouseEnv::toLegacyObservation(sp, in.data(), out.data());
+    for (int i = 0; i < head; ++i) EXPECT_EQ(out[static_cast<size_t>(i)], in[static_cast<size_t>(i)]);
+    for (int j = 0; j < 5; ++j) {
+        EXPECT_EQ(out[static_cast<size_t>(head + j)], o[k + j]);      // primero el más cercano
+        EXPECT_EQ(out[static_cast<size_t>(head + 5 + j)], o[j]);
+        EXPECT_EQ(out[static_cast<size_t>(head + 10 + j)], 0.0f);     // ausente al final
+    }
+    for (int j = 0; j < 6; ++j) EXPECT_EQ(out[static_cast<size_t>(legacy - 6 + j)], in[static_cast<size_t>(n - 6 + j)]);
 }
 
 TEST(Entorno, EsDeterministaConLaMismaSemilla) {

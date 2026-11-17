@@ -1,5 +1,6 @@
 #include "warehouse/env/warehouse_env.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace wrl {
@@ -114,7 +115,7 @@ void WarehouseEnv::reset(uint64_t seed) {
     decide(true);
     updateCarrot();
     sensors_.scanLidar(*world_, robot_.pose(), rng_, lidar_);
-    sensors_.perceiveObstacles(*world_, robot_.pose(), robot_.velocity(), obstacles_.obstacles(), perceived_);
+    sensors_.perceiveObstacles(*world_, robot_.pose(), robot_.velocity(), {cfg_.robot.halfLength, cfg_.robot.halfWidth}, obstacles_.obstacles(), perceived_);
     measuredV_ = measuredW_ = 0.0f;
     buildObservation();
 }
@@ -202,7 +203,22 @@ void WarehouseEnv::handleContacts(StepEvents& ev, Vec2 vBefore) {
         const auto& r = cfg_.reward;
         const Severity s = approach < r.grazeSpeed ? Severity::Graze : approach > r.severeSpeed ? Severity::Severe : Severity::Light;
         ++ev.collisions[static_cast<int>(s)];
-        if (s == Severity::Severe && c.other.tag == BodyTag::Worker) ++ev.workerSevere;
+
+        // La gravedad (y la métrica) depende de la velocidad relativa; el castigo, además,
+        // de quién tuvo la culpa. Si el robot estaba parado o alejándose y un obstáculo
+        // móvil se le echó encima, castigarlo entero le enseña a temer estar cerca de
+        // cualquier obstáculo (v11), no a conducir mejor. Contra muros y estanterías la
+        // culpa siempre es del robot.
+        const float base[3] = {r.collisionGraze, r.collisionLight, r.collisionSevere};
+        float penalty = base[static_cast<int>(s)];
+        const bool moving = c.other.tag == BodyTag::Forklift || c.other.tag == BodyTag::Worker;
+        if (c.other.tag == BodyTag::Worker && s != Severity::Severe) penalty *= r.workerCollisionScale;
+        if (moving && dot(vBefore, c.normal) < r.grazeSpeed) penalty *= r.collisionNoFaultScale;
+        ev.collisionPenalty += penalty;
+        if (c.other.tag == BodyTag::Worker) {
+            ++ev.workerHits[static_cast<int>(s)];
+            if (s == Severity::Severe) ++ev.workerSevere;
+        }
     }
 }
 
@@ -416,7 +432,7 @@ StepResult WarehouseEnv::step(const Action& action) {
     updateCarrot();
 
     sensors_.scanLidar(*world_, pose, rng_, lidar_);
-    sensors_.perceiveObstacles(*world_, pose, robot_.velocity(), obstacles_.obstacles(), perceived_);
+    sensors_.perceiveObstacles(*world_, pose, robot_.velocity(), {cfg_.robot.halfLength, cfg_.robot.halfWidth}, obstacles_.obstacles(), perceived_);
     measuredV_ = sensors_.noisySpeed(robot_.forwardSpeed(), rng_);
     measuredW_ = sensors_.noisySpeed(robot_.angularSpeed(), rng_);
     const float minLidar = *std::min_element(lidar_.begin(), lidar_.end());
@@ -427,9 +443,13 @@ StepResult WarehouseEnv::step(const Action& action) {
     reward += rw.timePerSecond * controlDt();
     reward += rw.energyPerKJ * static_cast<float>(energyJ / 1000.0);
     reward += rw.jerk * jerk;
-    reward += rw.collisionGraze * static_cast<float>(ev.collisions[0]);
-    reward += rw.collisionLight * static_cast<float>(ev.collisions[1]);
-    reward += rw.collisionSevere * static_cast<float>(ev.collisions[2]);
+    reward += ev.collisionPenalty;  // ver handleContacts
+    // Señal antes del choque: ir más rápido de lo que permite frenar a tiempo.
+    float unsafeWorker = 0.0f, unsafeForklift = 0.0f;
+    unsafeSpeed(unsafeWorker, unsafeForklift);
+    reward += (rw.unsafeWorkerPerSecond * unsafeWorker + rw.unsafeForkliftPerSecond * unsafeForklift) * controlDt();
+    if (unsafeWorker > 0.1f) metrics_.unsafeWorkerTime += controlDt();
+    if (unsafeForklift > 0.1f) metrics_.unsafeForkliftTime += controlDt();
     reward += rw.loadDestabilized * static_cast<float>(ev.loadDrops);
     reward += rw.criticalOverdue * static_cast<float>(ev.criticalOverdue);
     reward += rw.unnecessaryRecharge * static_cast<float>(ev.unnecessaryRecharges);
@@ -541,8 +561,13 @@ void WarehouseEnv::buildObservation() {
             *o++ = std::clamp(p.relVel.x / 2.0f, -1.5f, 1.5f);
             *o++ = std::clamp(p.relVel.y / 2.0f, -1.5f, 1.5f);
             *o++ = 1.0f;
+            *o++ = p.worker ? 1.0f : 0.0f;
+            *o++ = std::tanh(p.gap / 2.0f);                       // distancia entre superficies
+            *o++ = std::clamp(p.closing / 2.0f, -1.5f, 1.5f);     // velocidad de acercamiento
         } else {
-            for (int k = 0; k < 5; ++k) *o++ = 0.0f;
+            // Sin obstáculo: todo a cero salvo la distancia, que vale "lejos".
+            for (int k = 0; k < kPerObstacle; ++k) *o++ = 0.0f;
+            o[-2] = 1.0f;
         }
     }
     *o++ = std::clamp(robot_.lateralSpeed() / 0.5f, -1.0f, 1.0f);
@@ -571,6 +596,40 @@ bool WarehouseEnv::touching() const {
     for (int i = 0; i < n; ++i)
         if (buf[i].manifold.pointCount > 0) return true;
     return false;
+}
+
+void WarehouseEnv::unsafeSpeed(float& worker, float& forklift) const {
+    worker = forklift = 0.0f;
+    const auto& rw = cfg_.reward;
+    const Vec2 v = robot_.velocity();
+    for (const auto& p : perceived_) {
+        const float own = dot(v, p.normal);                // lo que el robot controla
+        if (own <= 0.0f) continue;
+        const float obstacleIn = p.closing - own;          // lo que el obstáculo pone de su parte
+        const float margin = p.worker ? rw.safetyMarginWorker : rw.safetyMarginForklift;
+        const float room = std::max(0.0f, p.gap - margin - std::max(0.0f, obstacleIn) * rw.safetyLookahead);
+        const float excess = own - std::sqrt(2.0f * rw.safetyDecel * room);
+        if (excess <= 0.0f) continue;
+        (p.worker ? worker : forklift) = std::max(p.worker ? worker : forklift, excess);
+    }
+}
+
+void WarehouseEnv::toLegacyObservation(const SensorParams& s, const float* in, float* out) {
+    // Disposición: LiDAR, 20 valores del robot y la tarea, obstáculos, 6 valores finales.
+    const int head = s.lidarRays + 20, n = s.nearestObstacles;
+    std::copy(in, in + head, out);
+    const float* obs = in + head;
+    std::vector<int> order(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) order[static_cast<size_t>(i)] = i;
+    auto present = [&](int i) { return obs[i * kPerObstacle + 4] > 0.5f; };
+    auto centerSq = [&](int i) { const float* b = obs + i * kPerObstacle; return b[0] * b[0] + b[1] * b[1]; };
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+        if (present(a) != present(b)) return present(a);
+        return centerSq(a) < centerSq(b);
+    });
+    float* o = out + head;
+    for (int i : order) o = std::copy(obs + i * kPerObstacle, obs + i * kPerObstacle + 5, o);
+    std::copy(obs + n * kPerObstacle, obs + n * kPerObstacle + 6, o);
 }
 
 float WarehouseEnv::loadStress() const {

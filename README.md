@@ -85,6 +85,7 @@ Opciones útiles:
 #    --scenario archivo.json entrena en un escenario fijo, sin generador.
 #    --blocking-wait libera el núcleo que espera a la GPU (≈2.6 % más lento).
 ./build/wrl_bench_sac        # mide cuánto tarda una actualización de SAC (fija la velocidad del entrenamiento)
+./build/wrl_collisions --policy sac --scenario configs/scenarios/e5_combinado.json   # analiza cada choque
 ./build/wrl_validate --generator 30   # comprueba el generador con la línea base A* + DWA
 
 # 4. Evaluar (100 episodios repartidos en 5 semillas, sin exploración)
@@ -197,10 +198,14 @@ Ahora (`src/sim/scenario_generator.cpp`):
    el nivel sube 0.05; si baja de 35 %, baja. Lo fácil se sigue viendo siempre. En la
    mitad de los episodios de repaso (`jointProb`) las dimensiones se sortean correladas,
    para que también aparezcan episodios difíciles en todo a la vez, como E5.
-3. **Mejor modelo por validación.** Cada 300 000 transiciones se evalúa la política
-   determinista en E1–E5 con semillas fijas (distintas de las de `wrl_evaluate`) y se
-   guarda `mejor_validacion.pt` si mejora. Antes se usaba la tasa del propio entrenamiento,
-   que no detectaba el olvido.
+3. **Mejor modelo por validación.** Cada 400 000 transiciones se evalúa la política
+   determinista en E1–E5 (10 episodios por escenario, semillas fijas distintas de las de
+   `wrl_evaluate`) y se guarda `mejor_validacion.pt` si mejora el puntaje. Antes se usaba
+   la tasa del propio entrenamiento, que no detectaba el olvido. Desde el v12 el puntaje
+   también mide seguridad: por escenario, completadas − 0.5 × graves con operario por
+   episodio − 0.5 × incidentes de carga por entrega − 0.02 × choques dañinos por episodio
+   (pesos en `configs/agent/sac.json`). Solo con completadas se elegían modelos rápidos
+   pero peligrosos.
 4. **Críticos con LayerNorm** (`criticLayerNorm`), que frena la divergencia de Q cuando la
    distribución de escenarios es amplia.
 
@@ -219,6 +224,66 @@ explicaba una forma concreta de fallar:
 La observación pasó de 74 a 77 valores (temporizador de estancamiento, cargando,
 contacto); los modelos anteriores están en `models/obsoletos_obs74/` y ya no se pueden
 cargar.
+
+### Choques: diagnóstico y correcciones (v11 y v12)
+
+`wrl_collisions` registra cada choque: contra qué fue, quién se acercó a quién, desde
+qué lado y qué percibía el robot un segundo antes. Con el modelo v10 en E4–E7:
+
+- **La percepción alcanzaba.** Un segundo antes de un choque grave, el obstáculo estaba
+  entre los 3 de la observación y lo tocaban rayos del LiDAR en el 88–100 % de los casos;
+  el resto estaba tapado por una estantería. Subir la resolución del LiDAR no ayudaría.
+- **El problema era la velocidad.** En los choques graves con operarios el robot iba a
+  ~1 m/s con ~1.5 m de separación un segundo antes y frenaba a fondo demasiado tarde (la
+  rampa de frenado es de 1.2 m/s²). SAC iba a más de 0.8 m/s en el 27–37 % de sus
+  choques con obstáculos móviles; DWA, en el 0–3 %, y en el 56–70 % de los suyos estaba
+  parado (obstáculos que no ceden el paso en los cruces).
+- **La observación tenía menos información que la de DWA:** no decía si el obstáculo era
+  un operario o un montacargas, y daba la posición del centro (con un montacargas de
+  1.2 × 0.8 m engaña hasta ~0.7 m).
+
+Cambios:
+
+1. **Observación** (77 → 86): por cada obstáculo cercano se añade si es operario, la
+   distancia entre la carrocería del robot y la superficie del obstáculo (GJK de Box2D) y
+   la velocidad de acercamiento. Los obstáculos se ordenan por esa distancia.
+2. **Castigo antes del choque** (velocidad segura según la separación, como el *speed and
+   separation monitoring* de los AGV): si la velocidad del robot hacia un obstáculo supera
+   √(2·a·(d − margen − lo que avanza el obstáculo en 1 s)), cada m/s de exceso cuesta 6 por
+   segundo con operarios y 3 con montacargas (`unsafeWorkerPerSecond`, `safetyDecel`…).
+   DWA solo pasa 0–4 s por episodio por encima de ese límite, así que es alcanzable.
+3. Roces con todo de −2 a −5, y roces y choques leves con operarios al doble
+   (`workerCollisionScale`).
+
+**Resultado del v11:** los choques graves con operarios bajaron (E5: 15 → 4), pero el
+robot se volvió indeciso: completó menos (E5: 78 % → 73 %, a tiempo 52 % → 31 %; E6:
+91 % → 82 %), un tercio de los episodios de E5 acabaron por tiempo máximo y los choques
+leves subieron (con operarios en E5: 66 → 115). `wrl_collisions` mostró que en esos
+choques leves el robot estaba casi parado o retrocediendo y era el obstáculo el que se le
+echaba encima: el castigo no distinguía la culpa, así que el robot aprendió a temer estar
+cerca de obstáculos en vez de conducir mejor. Además, la validación solo miraba tareas
+completadas y eligió un modelo con 64 % de incidentes de carga en E1.
+
+**Cambios del v12:**
+
+1. **Castigo según la culpa** (`collisionNoFaultScale` = 0.25): si el robot estaba parado
+   o alejándose (< 0.2 m/s hacia el obstáculo) y un obstáculo móvil lo golpeó, el choque
+   cuesta la cuarta parte. Contra muros y estanterías siempre es culpa del robot. La
+   gravedad y las métricas no cambian.
+2. **Velocidad insegura más suave:** 3 por m/s de exceso y segundo con operarios, 1.5
+   con montacargas.
+3. **Validación con seguridad** (ver "Mejor modelo por validación") y con 10 episodios
+   por escenario en vez de 4, que hacían saltar E5 ±25 puntos entre validaciones.
+
+**Compatibilidad:** los modelos de 77 observaciones (v9, v10) siguen funcionando: la
+política detecta el tamaño del modelo y le da la observación en su formato
+(`WarehouseEnv::toLegacyObservation`). Evaluado así, el v10 da lo mismo que con su código
+original (E1–E3 idénticos, E4–E7 a ±2 puntos).
+
+Las métricas por episodio incluyen ahora `inseguro_operario_s` e `inseguro_montacargas_s`.
+Una capa de seguridad fija que limite la velocidad (como el escáner de seguridad de un
+AGV real) queda como último recurso, para que por ahora la conducción segura sea
+aprendida.
 
 `wrl_validate --generator N` resuelve N escenarios por nivel con A* + DWA y muestra el
 resultado por nivel, por dimensión aislada y quitando una dimensión cada vez. Con 30 por

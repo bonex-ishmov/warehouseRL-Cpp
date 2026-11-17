@@ -18,11 +18,18 @@ public:
 
     Action act(const WarehouseEnv& env) override {
         const auto& obs = env.observation();
-        if (static_cast<int>(obs.size()) != obsDim_)
+        const auto& sensors = env.config().sensors;
+        float* in = input_.data_ptr<float>();
+        if (static_cast<int>(obs.size()) == obsDim_) {
+            std::memcpy(in, obs.data(), obs.size() * sizeof(float));
+        } else if (obsDim_ == WarehouseEnv::legacyObservationSize(sensors)) {
+            // Modelo anterior al v11 (p. ej. v10): se le da la observación en su formato.
+            WarehouseEnv::toLegacyObservation(sensors, obs.data(), in);
+        } else {
             throw std::runtime_error("el modelo espera " + std::to_string(obsDim_) + " observaciones y el escenario produce " +
                                      std::to_string(obs.size()));
+        }
         torch::NoGradGuard ng;
-        std::memcpy(input_.data_ptr<float>(), obs.data(), obs.size() * sizeof(float));
         const auto a = actor_->deterministic(input_.to(device_)).to(torch::kCPU);
         return {a[0][0].item<float>(), a[0][1].item<float>()};
     }

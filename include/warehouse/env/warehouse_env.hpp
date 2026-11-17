@@ -35,6 +35,8 @@ struct StepEvents {
     int deliveriesLate = 0;
     int criticalOnTime = 0;
     int collisions[3] = {0, 0, 0};
+    int workerHits[3] = {0, 0, 0};  ///< de los anteriores, los que fueron con operarios
+    float collisionPenalty = 0.0f;  ///< castigo total de los choques del paso (según gravedad, operario y culpa)
     int workerSevere = 0;
     int loadDrops = 0;
     int criticalOverdue = 0;
@@ -82,6 +84,8 @@ struct EpisodeMetrics {
     double sumAbsAccel = 0.0;
     int steps = 0;
     int slipSteps = 0;
+    double unsafeWorkerTime = 0.0;    ///< s yendo > 0.1 m/s más rápido de lo que permite frenar ante un operario
+    double unsafeForkliftTime = 0.0;
     EndReason reason = EndReason::None;
 
     double completionRate() const { return tasksTotal ? static_cast<double>(delivered) / tasksTotal : 0.0; }
@@ -110,7 +114,13 @@ public:
 
     static constexpr int kActionSize = 2;
     int observationSize() const { return obsSize_; }
-    static int observationSize(const SensorParams& s) { return s.lidarRays + 26 + 5 * s.nearestObstacles; }
+    static int observationSize(const SensorParams& s) { return s.lidarRays + 26 + kPerObstacle * s.nearestObstacles; }
+    static constexpr int kPerObstacle = 8;
+    /// Formato de los modelos anteriores al v11: 5 valores por obstáculo (sin tipo,
+    /// distancia entre superficies ni acercamiento) y obstáculos ordenados por centro.
+    static int legacyObservationSize(const SensorParams& s) { return s.lidarRays + 26 + 5 * s.nearestObstacles; }
+    /// Convierte una observación actual (observationSize) a ese formato (legacyObservationSize).
+    static void toLegacyObservation(const SensorParams& s, const float* in, float* out);
     const std::vector<float>& observation() const { return obs_; }
 
     /// Guarda las acciones del episodio para reproducirlo después.
@@ -146,6 +156,9 @@ public:
     float frictionUnderRobot() const;
     /// Aceleración que siente la carga respecto a su límite (0 sin carga, >= 1 se cae).
     float loadStress() const;
+    /// Exceso de velocidad hacia los obstáculos percibidos respecto a la que permite
+    /// frenar a tiempo (m/s), por separado para operarios y montacargas.
+    void unsafeSpeed(float& worker, float& forklift) const;
     const EpisodeMetrics& metrics() const { return metrics_; }
     uint64_t seed() const { return seed_; }
     Action lastAction() const { return lastAction_; }

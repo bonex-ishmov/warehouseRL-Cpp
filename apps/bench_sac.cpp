@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Este banco de pruebas necesita CUDA.\n");
         return 1;
     }
-    const int obsDim = args.getInt("obs", 77);
+    const int obsDim = args.getInt("obs", 86);
     const int iters = args.getInt("iters", 2000);
     const double utd = args.getDouble("utd", 0.25);
     const torch::Device device(torch::kCUDA);

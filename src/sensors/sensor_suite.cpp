@@ -1,5 +1,7 @@
 #include "warehouse/sensors/sensor_suite.hpp"
 
+#include <box2d/collision.h>
+
 namespace wrl {
 
 void SensorSuite::configure(const SensorParams& params) { params_ = params; }
@@ -20,10 +22,19 @@ void SensorSuite::scanLidar(const PhysicsWorld& world, Pose robot, Rng& rng, std
     }
 }
 
-void SensorSuite::perceiveObstacles(const PhysicsWorld& world, Pose robot, Vec2 robotVel,
+void SensorSuite::perceiveObstacles(const PhysicsWorld& world, Pose robot, Vec2 robotVel, Vec2 robotHalf,
                                     const std::vector<DynamicObstacle>& obstacles,
                                     std::vector<PerceivedObstacle>& out) const {
     out.clear();
+    // Carrocería del robot y de cada obstáculo como formas convexas: la distancia
+    // entre superficies (GJK de Box2D) es lo que importa para frenar a tiempo; la
+    // del centro engaña hasta ~0.7 m con un montacargas de 1.2 x 0.8 m.
+    const b2Vec2 robotPts[4] = {{-robotHalf.x, -robotHalf.y}, {robotHalf.x, -robotHalf.y},
+                                {robotHalf.x, robotHalf.y}, {-robotHalf.x, robotHalf.y}};
+    b2DistanceInput in{};
+    in.proxyA = b2MakeProxy(robotPts, 4, 0.0f);
+    in.transformA = {toB2(robot.pos), b2MakeRot(robot.theta)};
+    in.useRadii = true;
     for (const auto& o : obstacles) {
         const Vec2 d = o.pos - robot.pos;
         const float dist = d.length();
@@ -37,10 +48,24 @@ void SensorSuite::perceiveObstacles(const PhysicsWorld& world, Pose robot, Vec2 
         p.relVel = toLocal(o.vel - robotVel, robot.theta);
         p.radius = o.isWorker() ? o.halfExtents.x : o.halfExtents.length();
         p.worker = o.isWorker();
+
+        if (o.isWorker()) {
+            const b2Vec2 c{0.0f, 0.0f};
+            in.proxyB = b2MakeProxy(&c, 1, o.halfExtents.x);
+        } else {
+            const b2Vec2 pts[4] = {{-o.halfExtents.x, -o.halfExtents.y}, {o.halfExtents.x, -o.halfExtents.y},
+                                   {o.halfExtents.x, o.halfExtents.y}, {-o.halfExtents.x, o.halfExtents.y}};
+            in.proxyB = b2MakeProxy(pts, 4, 0.0f);
+        }
+        in.transformB = {toB2(o.pos), b2MakeRot(o.theta)};
+        b2SimplexCache cache{};
+        const b2DistanceOutput r = b2ShapeDistance(&in, &cache, nullptr, 0);
+        p.gap = r.distance;
+        p.normal = r.distance > 1e-4f ? normalized(fromB2(r.normal)) : (dist > 1e-4f ? d / dist : Vec2{1, 0});
+        p.closing = dot(robotVel - o.vel, p.normal);
         out.push_back(p);
     }
-    std::sort(out.begin(), out.end(),
-              [](const PerceivedObstacle& a, const PerceivedObstacle& b) { return a.relPos.lengthSq() < b.relPos.lengthSq(); });
+    std::sort(out.begin(), out.end(), [](const PerceivedObstacle& a, const PerceivedObstacle& b) { return a.gap < b.gap; });
     if (out.size() > static_cast<size_t>(params_.nearestObstacles)) out.resize(static_cast<size_t>(params_.nearestObstacles));
 }
 

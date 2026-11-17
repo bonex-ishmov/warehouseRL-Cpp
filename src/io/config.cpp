@@ -115,6 +115,14 @@ void parseReward(const Json& j, RewardParams& r) {
     read(j, "stuckPerSecond", r.stuckPerSecond);
     read(j, "stuckGrace", r.stuckGrace);
     read(j, "contactPerSecond", r.contactPerSecond);
+    read(j, "unsafeWorkerPerSecond", r.unsafeWorkerPerSecond);
+    read(j, "unsafeForkliftPerSecond", r.unsafeForkliftPerSecond);
+    read(j, "safetyDecel", r.safetyDecel);
+    read(j, "safetyMarginWorker", r.safetyMarginWorker);
+    read(j, "safetyMarginForklift", r.safetyMarginForklift);
+    read(j, "safetyLookahead", r.safetyLookahead);
+    read(j, "workerCollisionScale", r.workerCollisionScale);
+    read(j, "collisionNoFaultScale", r.collisionNoFaultScale);
     read(j, "grazeSpeed", r.grazeSpeed);
     read(j, "severeSpeed", r.severeSpeed);
 }

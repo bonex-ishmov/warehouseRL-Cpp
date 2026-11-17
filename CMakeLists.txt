@@ -94,6 +94,13 @@ if(WRL_BUILD_AGENT)
     target_link_libraries(wrl_evaluate PRIVATE wrl_agent)
 endif()
 
+# Diagnóstico de choques: contra qué, desde dónde y qué percibía el robot antes
+add_executable(wrl_collisions apps/collision_report.cpp)
+target_link_libraries(wrl_collisions PRIVATE wrl_core wrl_options)
+if(WRL_BUILD_AGENT)
+    target_link_libraries(wrl_collisions PRIVATE wrl_agent)
+endif()
+
 # --- Visor SFML e interfaz gráfica
 # Mismo reparto que en Proyecto_DQL: wrl_core (lógica, sin gráficos) <- wrl_render
 # (solo dibuja) <- aplicaciones; el agente (wrl_agent) se enlaza aparte y la

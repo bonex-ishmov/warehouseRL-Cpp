@@ -96,7 +96,7 @@ struct RewardParams {
     float timePerSecond = -0.1f;
     float energyPerKJ = -0.02f;
     float jerk = -0.05f;
-    float collisionGraze = -2.0f;
+    float collisionGraze = -5.0f;
     float collisionLight = -25.0f;
     float collisionSevere = -100.0f;
     float loadDestabilized = -40.0f;
@@ -112,6 +112,18 @@ struct RewardParams {
     float stuckPerSecond = -1.0f;    ///< sin avanzar más de stuckGrace s: castigo denso antes del corte
     float stuckGrace = 5.0f;
     float contactPerSecond = -1.0f;  ///< empujando contra un muro, estante u obstáculo (el choque solo cuenta al empezar)
+    // Velocidad segura según la separación (como el "speed and separation monitoring"
+    // de los AGV): con un obstáculo a una distancia gap, la velocidad del robot hacia él
+    // no debería superar sqrt(2 * safetyDecel * (gap - margen - lo que el obstáculo
+    // avanza en safetyLookahead)). Cada m/s de exceso cuesta esto por segundo.
+    float unsafeWorkerPerSecond = -3.0f;
+    float unsafeForkliftPerSecond = -1.5f;
+    float safetyDecel = 1.0f;          ///< m/s², algo menos que la rampa de frenado (1.2)
+    float safetyMarginWorker = 0.4f;   ///< m que deben quedar al detenerse
+    float safetyMarginForklift = 0.2f;
+    float safetyLookahead = 1.0f;      ///< s de avance del obstáculo que se descuentan
+    float workerCollisionScale = 2.0f; ///< roces y choques leves con operarios cuestan esto veces más
+    float collisionNoFaultScale = 0.25f; ///< choque con un obstáculo móvil estando el robot parado o alejándose
     float grazeSpeed = 0.2f;   ///< por debajo: roce
     float severeSpeed = 0.8f;  ///< por encima: grave
 };
