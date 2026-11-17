@@ -1,0 +1,18 @@
+{
+  // Distribución de almacén distinta a la de entrenamiento (dimensiones, pasillos y estanterías).
+  "base": "../robot/default.json",
+  "name": "E6_generalizacion",
+  "description": "Mapas procedurales con otra geometría, posiciones y secuencias no vistas",
+  "map": { "procedural": { "width": 34, "height": 26, "aisleWidth": 2.4, "shelfDepth": 0.9, "shelfLength": 6.5,
+                           "crossAisle": 2.6, "removeShelfProb": 0.25, "chargers": 3, "dropoffs": 5,
+                           "frictionZones": 2, "restrictedZones": 1 } },
+  "tasks": {
+    "count": 10, "initial": 3, "arrivalInterval": 60.0,
+    "priorityWeights": { "low": 0.3, "medium": 0.3, "high": 0.25, "critical": 0.15 },
+    "deadlines": true, "deadlineBase": 45.0, "slackMin": 2.0, "slackMax": 3.5
+  },
+  "energy": { "capacityWh": 10.0, "initialFraction": 0.6 },
+  "obstacles": { "minCount": 2, "maxCount": 5 },
+  "sim": { "maxTime": 1500.0 },
+  "acceptance": { "minCompletionRate": 0.75, "maxLoadIncidentRate": 0.02, "maxWorkerSevere": 0 }
+}

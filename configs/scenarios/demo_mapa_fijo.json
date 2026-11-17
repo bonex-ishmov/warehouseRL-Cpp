@@ -1,0 +1,24 @@
+{
+  // Ejemplo de mapa explícito (sin generador): rectángulos con esquina mínima (x, y), ancho w y alto h.
+  "base": "../robot/default.json",
+  "name": "demo_mapa_fijo",
+  "description": "Almacén pequeño definido a mano, con una zona resbaladiza y un operario con ruta fija",
+  "map": {
+    "procedural": null,
+    "width": 20, "height": 16,
+    "shelves": [
+      { "x": 3, "y": 4, "w": 5, "h": 2 }, { "x": 11, "y": 4, "w": 5, "h": 2 },
+      { "x": 3, "y": 9, "w": 5, "h": 2 }, { "x": 11, "y": 9, "w": 5, "h": 2 }
+    ],
+    "restricted": [ { "x": 17.5, "y": 6.5, "w": 2, "h": 2 } ],
+    "frictionZones": [ { "x": 8.5, "y": 6.2, "w": 2.2, "h": 2.6, "mu": 0.3 } ],
+    "pickups": [ [5.5, 3.2], [13.5, 3.2], [5.5, 6.8], [13.5, 6.8], [5.5, 11.8], [13.5, 11.8] ],
+    "dropoffs": [ [4, 1.3], [10, 1.3], [16, 1.3] ],
+    "chargers": [ [2, 14.7], [18, 14.7] ],
+    "robotStart": { "x": 2, "y": 13.5, "theta": -1.5708 }
+  },
+  "tasks": { "count": 4, "initial": 2, "arrivalInterval": 25.0 },
+  "obstacles": { "fixed": [ { "kind": "worker", "route": [[1.5, 8], [18, 8]], "speed": 0.7, "pause": 2.0 } ] },
+  "sim": { "maxTime": 600.0 },
+  "acceptance": { "minCompletionRate": 0.9 }
+}

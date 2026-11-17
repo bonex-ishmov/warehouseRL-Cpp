@@ -1,0 +1,7 @@
+{
+  // Currículo, etapa 5: obstáculos móviles con densidad creciente.
+  "base": "../e4_dinamico.json",
+  "name": "T4_dinamico",
+  "randomization": { "enabled": true, "friction": 0.3, "mass": 0.15, "motorForce": 0.1, "lidarNoiseMax": 0.05,
+                     "obstacleSpeed": 0.2 }
+}

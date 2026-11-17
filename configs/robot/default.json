@@ -1,0 +1,49 @@
+{
+  // Parámetros físicos y de simulación comunes a todos los escenarios.
+  // Cada escenario hace "base": "../robot/default.json" y sobreescribe lo que necesite.
+  "robot": {
+    "halfLength": 0.30, "halfWidth": 0.25, "mass": 50.0, "trackWidth": 0.50,
+    "maxForwardSpeed": 1.5, "maxReverseSpeed": 0.3, "maxAngularSpeed": 2.0,
+    "maxWheelForce": 60.0, "speedGain": 300.0, "rollingResistance": 0.02,
+    "floorFriction": 0.8, "angularDamping": 1.0, "bodyFriction": 0.3,
+    "restitution": 0.1, "maxCarryMass": 30.0,
+    "commandAccel": 1.2, "commandAngularAccel": 4.0
+  },
+  "energy": {
+    "capacityWh": 20.0, "initialFraction": 1.0, "basePowerW": 20.0, "efficiency": 0.8,
+    "regenEfficiency": 0.0, "chargePowerW": 250.0, "reserveFraction": 0.15,
+    "chargeTarget": 0.95, "unnecessaryAbove": 0.8
+  },
+  "loadTypes": [
+    { "name": "liviana", "mass": 5.0,  "lateralLimit": 3.5, "longitudinalLimit": 3.5 },
+    { "name": "media",   "mass": 15.0, "lateralLimit": 3.0, "longitudinalLimit": 3.0 },
+    { "name": "pesada",  "mass": 30.0, "lateralLimit": 2.5, "longitudinalLimit": 2.5 },
+    { "name": "fragil",  "mass": 10.0, "lateralLimit": 1.6, "longitudinalLimit": 1.8, "fragile": true }
+  ],
+  "sensors": {
+    "lidarRays": 36, "lidarRange": 8.0, "lidarNoise": 0.02, "lidarDropout": 0.0,
+    "odometryNoise": 0.0, "nearestObstacles": 3
+  },
+  "sim": {
+    "physicsDt": 0.016666667, "subSteps": 4, "physicsStepsPerAction": 6, "maxTime": 600.0,
+    "maxCollisions": 10, "dockRadius": 0.4, "dockSpeed": 0.1, "dockAngularSpeed": 0.3,
+    "dockTime": 0.5, "lookahead": 1.5, "replanInterval": 2.0, "offPathReplan": 1.5,
+    "gridResolution": 0.2, "inflation": 0.55, "clearanceCost": 2.0, "nominalSpeed": 0.6,
+    "loadSmoothing": 0.1, "collisionCooldown": 0.5
+  },
+  "reward": {
+    "deliveryOnTime": 100.0, "deliveryCriticalOnTime": 150.0, "pickup": 15.0, "chargeComplete": 15.0,
+    "progressPerMeter": 1.0, "timePerSecond": -0.1, "energyPerKJ": -0.02, "jerk": -0.05,
+    "collisionGraze": -2.0, "collisionLight": -25.0, "collisionSevere": -100.0,
+    "loadDestabilized": -40.0, "lateDelivery": -20.0, "latePerSecond": -0.2, "lateCap": -50.0, "abandonedTask": -20.0,
+    "batteryDepleted": -50.0, "unnecessaryRecharge": -2.0, "criticalOverdue": -75.0,
+    "restrictedEntry": -5.0, "stalled": -50.0, "stuckPerSecond": -1.0, "stuckGrace": 5.0,
+    "contactPerSecond": -1.0, "grazeSpeed": 0.2, "severeSpeed": 0.8
+  },
+  "map": {
+    "procedural": { "width": 24, "height": 24, "aisleWidth": 2.6, "shelfDepth": 1.0,
+                    "shelfLength": 5.0, "crossAisle": 2.8, "margin": 3.0, "removeShelfProb": 0.1,
+                    "chargers": 2, "dropoffs": 4 }
+  },
+  "tasks": { "count": 1, "initial": 1, "priorityWeights": [1, 0, 0, 0], "deadlines": false }
+}

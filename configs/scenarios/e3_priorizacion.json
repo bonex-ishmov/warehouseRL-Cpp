@@ -1,0 +1,12 @@
+{
+  "base": "../robot/default.json",
+  "name": "E3_priorizacion",
+  "description": "10 tareas con prioridades y plazos",
+  "tasks": {
+    "count": 10, "initial": 2, "arrivalInterval": 50.0,
+    "priorityWeights": { "low": 0.3, "medium": 0.3, "high": 0.25, "critical": 0.15 },
+    "deadlines": true, "deadlineBase": 40.0, "slackMin": 2.0, "slackMax": 3.5
+  },
+  "sim": { "maxTime": 1200.0 },
+  "acceptance": { "minOnTimeRate": 0.8, "maxLoadIncidentRate": 0.02 }
+}

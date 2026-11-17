@@ -1,0 +1,9 @@
+{
+  "base": "../robot/default.json",
+  "name": "E4_dinamico",
+  "description": "5 tareas y de 3 a 8 obstáculos móviles (montacargas y operarios)",
+  "tasks": { "count": 5, "initial": 3, "arrivalInterval": 20.0 },
+  "obstacles": { "minCount": 3, "maxCount": 8, "forkliftFraction": 0.4, "speedMin": 0.5, "speedMax": 1.1 },
+  "sim": { "maxTime": 900.0 },
+  "acceptance": { "minCompletionRate": 0.9, "minCollisionFreeEpisodes": 0.95, "maxWorkerSevere": 0 }
+}

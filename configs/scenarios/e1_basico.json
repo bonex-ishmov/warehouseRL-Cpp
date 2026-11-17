@@ -1,0 +1,9 @@
+{
+  "base": "../robot/default.json",
+  "name": "E1_basico",
+  "description": "1 tarea, obstáculos estáticos, batería suficiente, fricción nominal",
+  "map": { "procedural": { "width": 20, "height": 20, "shelfLength": 4.5, "crossAisle": 2.5 } },
+  "tasks": { "count": 1, "initial": 1 },
+  "sim": { "maxTime": 180.0 },
+  "acceptance": { "minCompletionRate": 0.9, "maxPathRatio": 1.25, "maxLoadIncidentRate": 0.02 }
+}

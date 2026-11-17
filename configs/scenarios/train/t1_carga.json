@@ -1,0 +1,8 @@
+{
+  // Currículo, etapa 2: tareas con cargas de distinta masa y fragilidad.
+  "base": "../e1_basico.json",
+  "name": "T1_carga",
+  "tasks": { "count": 2, "initial": 1, "arrivalInterval": 20.0, "loadTypes": [] },
+  "sim": { "maxTime": 300.0 },
+  "randomization": { "enabled": true, "friction": 0.3, "mass": 0.15, "motorForce": 0.1, "lidarNoiseMax": 0.05 }
+}

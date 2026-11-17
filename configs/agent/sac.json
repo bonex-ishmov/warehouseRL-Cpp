@@ -1,0 +1,51 @@
+{
+  // Hiperparámetros de SAC y del entrenamiento, ajustados para un Ryzen 5 6600H
+  // (6 núcleos / 12 hilos) y una RTX 3050 Laptop de 4 GB.
+  "sac": {
+    "hidden": 256, "gamma": 0.99, "tau": 0.005,
+    "actorLr": 0.0003, "criticLr": 0.0003, "alphaLr": 0.0003,
+    "initAlpha": 0.2, "autoAlpha": true, "targetEntropy": -2.0, "minAlpha": 0.003, "maxGradNorm": 5.0,
+    "rewardScale": 0.1, "batchSize": 512,
+    "tf32": true,              // núcleos tensoriales (RTX 30+): ~12 % más rápido
+    "criticLayerNorm": true    // estabiliza Q con escenarios muy distintos entre sí
+  },
+  "training": {
+    "device": "auto",
+    "numEnvs": 24,             // entornos en paralelo
+    "threads": 6,              // hilos de simulación (1 por núcleo físico; el resto queda para Torch y el sistema)
+    "totalSteps": 15000000,    // transiciones
+    "updatesPerTransition": 0.25,
+    "replayCapacity": 1000000, // ~600 MB en la GPU con 77 observaciones
+    "warmupSteps": 20000,
+    "warmupPolicy": "dwa",     // "dwa" (demostraciones de la línea base con ruido) o "random"
+    "warmupNoise": 0.3,
+    "logEvery": 10000,
+    "checkpointEvery": 200000,
+    "seed": 1
+  },
+  // Cada episodio usa un escenario generado por reglas (src/sim/scenario_generator.cpp).
+  // Seis dimensiones de dificultad (mapa, tareas, energía, cargas, obstáculos, terreno)
+  // suben o bajan por separado según el éxito en episodios "de frontera"; el resto de
+  // episodios repasa niveles ya dominados, así que no hay olvido por cambio de etapa.
+  "generator": {
+    "base": "../robot/default.json",
+    "frontierProb": 0.6,   // fracción de episodios que empujan una dimensión
+    "jointProb": 0.5,      // fracción con todas las dimensiones correlacionadas (difícil en todo a la vez)
+    "frontierWidth": 0.1,  // cuánto por encima del nivel actual
+    "step": 0.05,          // cambio de nivel por decisión
+    "raiseAt": 0.75,       // éxito medio en la frontera para subir
+    "lowerAt": 0.35,       // por debajo, baja
+    "window": 24,          // episodios de frontera por decisión
+    "startLevel": 0.0
+  },
+  // Validación con semillas fijas; decide qué modelo se guarda como mejor_validacion.pt.
+  // E6 y E7 quedan fuera: miden generalización y robustez solo en la evaluación final.
+  "validation": {
+    "every": 300000,
+    "episodesPerScenario": 4,
+    "scenarios": [
+      "../scenarios/e1_basico.json", "../scenarios/e2_energia.json", "../scenarios/e3_priorizacion.json",
+      "../scenarios/e4_dinamico.json", "../scenarios/e5_combinado.json"
+    ]
+  }
+}

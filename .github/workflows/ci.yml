@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Caché de LibTorch (CPU)
+        uses: actions/cache@v4
+        with:
+          path: .deps
+          key: libtorch-2.14.1-cpu
+
+      - name: Configurar
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DWRL_NATIVE=OFF
+          -DWRL_BUILD_VIEWER=OFF
+          -DWRL_TORCH_VARIANT=cpu
+
+      - name: Compilar
+        run: cmake --build build -j
+
+      - name: Pruebas
+        run: ctest --test-dir build --output-on-failure -j 2
+
+      - name: Validar escenarios con la línea base A* + DWA
+        run: ./build/wrl_validate --episodes 2
+
+      - name: Rendimiento de la simulación
+        run: ./build/wrl_benchmark --seconds 1 --max-threads 2

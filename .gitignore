@@ -1,0 +1,8 @@
+build/
+cmake-build-*/
+.deps/
+runs/
+results/
+*.log
+.cache/
+compile_commands.json

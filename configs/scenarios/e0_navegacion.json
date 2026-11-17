@@ -1,0 +1,11 @@
+{
+  // Etapa de currículo: navegar y acoplar con una tarea liviana, sin obstáculos móviles.
+  "base": "../robot/default.json",
+  "name": "E0_navegacion",
+  "description": "1 tarea liviana, mapa procedural pequeño, batería ilimitada en la práctica",
+  "map": { "procedural": { "width": 20, "height": 20, "shelfLength": 4.5, "crossAisle": 2.5 } },
+  "tasks": { "count": 1, "initial": 1, "loadTypes": ["liviana"] },
+  "sim": { "maxTime": 150.0 },
+  "randomization": { "enabled": true, "friction": 0.2, "mass": 0.1, "motorForce": 0.1, "lidarNoiseMax": 0.03 },
+  "acceptance": { "minCompletionRate": 0.9 }
+}

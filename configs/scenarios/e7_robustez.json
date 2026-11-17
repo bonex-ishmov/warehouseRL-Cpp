@@ -1,0 +1,9 @@
+{
+  // E5 con parámetros físicos fuera del rango de entrenamiento.
+  "base": "e5_combinado.json",
+  "name": "E7_robustez_fisica",
+  "description": "E5 con fricción, masa, fuerza de motores y ruido de sensores fuera del rango de entrenamiento",
+  "randomization": { "enabled": true, "friction": 0.45, "mass": 0.25, "motorForce": 0.2, "lidarNoiseMax": 0.08,
+                     "obstacleSpeed": 0.3 },
+  "acceptance": { "minCompletionRate": 0.65, "maxWorkerSevere": 0 }
+}

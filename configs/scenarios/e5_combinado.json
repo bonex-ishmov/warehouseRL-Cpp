@@ -1,0 +1,16 @@
+{
+  "base": "../robot/default.json",
+  "name": "E5_combinado",
+  "description": "15 tareas, energía, cargas, plazos, zonas de baja fricción, zona restringida y obstáculos móviles",
+  "map": { "procedural": { "width": 30, "height": 30, "frictionZones": 3, "frictionMin": 0.3, "frictionMax": 0.5,
+                           "restrictedZones": 1 } },
+  "tasks": {
+    "count": 15, "initial": 3, "arrivalInterval": 60.0,
+    "priorityWeights": { "low": 0.3, "medium": 0.3, "high": 0.25, "critical": 0.15 },
+    "deadlines": true, "deadlineBase": 45.0, "slackMin": 2.0, "slackMax": 3.5
+  },
+  "energy": { "capacityWh": 10.0, "initialFraction": 0.6 },
+  "obstacles": { "minCount": 3, "maxCount": 6 },
+  "sim": { "maxTime": 2000.0 },
+  "acceptance": { "minCompletionRate": 0.75, "maxLoadIncidentRate": 0.02, "maxDepletionRate": 0.05, "maxWorkerSevere": 0 }
+}

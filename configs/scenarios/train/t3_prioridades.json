@@ -1,0 +1,6 @@
+{
+  // Currículo, etapa 4: varias tareas, prioridades y plazos.
+  "base": "../e3_priorizacion.json",
+  "name": "T3_prioridades",
+  "randomization": { "enabled": true, "friction": 0.3, "mass": 0.15, "motorForce": 0.1, "lidarNoiseMax": 0.05 }
+}

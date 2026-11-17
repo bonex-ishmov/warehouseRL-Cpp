@@ -1,0 +1,6 @@
+{
+  // Currículo, etapa 3: batería limitada y recarga.
+  "base": "../e2_energia.json",
+  "name": "T2_energia",
+  "randomization": { "enabled": true, "friction": 0.3, "mass": 0.15, "motorForce": 0.1, "lidarNoiseMax": 0.05 }
+}

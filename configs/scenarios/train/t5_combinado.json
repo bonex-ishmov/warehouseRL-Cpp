@@ -1,0 +1,7 @@
+{
+  // Currículo, etapa 6: escenario combinado con aleatorización de dominio.
+  "base": "../e5_combinado.json",
+  "name": "T5_combinado",
+  "randomization": { "enabled": true, "friction": 0.3, "mass": 0.15, "motorForce": 0.1, "lidarNoiseMax": 0.05,
+                     "obstacleSpeed": 0.2 }
+}
