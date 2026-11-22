@@ -44,6 +44,7 @@ struct Snapshot {
     std::vector<Vec2> obsPos, obsVel;
     std::vector<ObsView> views;
     int losCount = 0;     ///< obstáculos en rango y a la vista (antes de quedarse con los N más cercanos)
+    float minLidar = 0.0f;
 };
 
 struct Collision {
@@ -64,6 +65,11 @@ struct Collision {
     bool inObs1s = false, inObsNow = false, los1s = false;
     int losCount1s = 0;
     float minLidarNow = 0.0f;    ///< lectura mínima del LiDAR antes del choque (m)
+    // Contexto (sobre todo para choques contra lo estático):
+    float minLidar1s = 0.0f, v1s = 0.0f;
+    float omega = 0.0f;          ///< giro del robot antes del choque, rad/s
+    float friction = 0.0f;       ///< adherencia bajo el robot
+    float goalDist = 0.0f;       ///< distancia al objetivo actual, m
 };
 
 float robotSupport(const RobotParams& rp, Vec2 dirLocal) {
@@ -87,6 +93,7 @@ Snapshot capture(const WarehouseEnv& env) {
     s.vel = env.robot().velocity();
     s.v = env.robot().forwardSpeed();
     s.action = env.lastAction();
+    s.minLidar = *std::min_element(env.lidar().begin(), env.lidar().end());
     const auto& obs = env.obstacles();
     s.views.resize(obs.size());
 
@@ -183,6 +190,20 @@ void printSummary(const std::vector<Collision>& cs, int episodes) {
                             "      justo antes del choque: sin rayos %.0f%%, fuera de la observación %.0f%%\n",
                             pct(noRays1s, n), pct(notInObs1s, n), pct(occluded1s, n), pct(crowded1s, n), pct(noRaysNow, n),
                             pct(notInObsNow, n));
+            else {
+                // ¿Lo veía venir? LiDAR (desde el centro) y velocidad 1 s antes, giro, suelo y objetivo.
+                double l1 = 0, v1 = 0, om = 0, mu = 0, gd = 0;
+                int slippery = 0, nearGoal = 0, turning = 0;
+                for (auto* c : s2) {
+                    l1 += c->minLidar1s, v1 += c->v1s, om += std::abs(c->omega), mu += c->friction, gd += c->goalDist;
+                    if (c->friction < 0.7f) ++slippery;
+                    if (c->goalDist < 1.5f) ++nearGoal;
+                    if (std::abs(c->omega) > 0.5f) ++turning;
+                }
+                std::printf("      1 s antes: LiDAR mín %.2f m, v %.2f m/s | giro medio %.2f rad/s (girando >0.5: %.0f%%) | "
+                            "adherencia media %.2f (resbaladizo %.0f%%) | objetivo a %.1f m (a <1.5 m: %.0f%%)\n",
+                            l1 / n, v1 / n, om / n, pct(turning, n), mu / n, pct(slippery, n), gd / n, pct(nearGoal, n));
+            }
         }
     }
 }
@@ -193,7 +214,8 @@ int main(int argc, char** argv) {
     cli::Args args(argc, argv);
     if (args.has("help") || !args.has("scenario")) {
         std::puts("Uso: wrl_collisions --scenario e.json [--scenario ...] [--policy sac|dwa] [--model m.pt]\n"
-                  "                     [--episodes 100] [--seeds 5] [--threads N] [--csv choques.csv]");
+                  "                     [--episodes 100] [--seeds 5] [--threads N] [--csv choques.csv]\n"
+                  "                     [--shield on|off]");
         return args.has("help") ? 0 : 1;
     }
     const std::string policyName = args.get("policy", "sac");
@@ -204,7 +226,8 @@ int main(int argc, char** argv) {
 
     std::vector<Collision> all;
     for (const auto& scenarioPath : args.all("scenario")) {
-        const ScenarioConfig cfg = loadScenario(scenarioPath);
+        ScenarioConfig cfg = loadScenario(scenarioPath);
+        if (args.has("shield")) cfg.shield.enabled = args.get("shield") != "off";
         const int perSeed = std::max(1, episodes / seeds);
         std::vector<uint64_t> jobs;
         for (int s = 0; s < seeds; ++s)
@@ -254,7 +277,12 @@ int main(int argc, char** argv) {
                             c.robotV = now.v;
                             c.action = env.lastAction().linear;
                             c.carrying = carrying;
-                            c.minLidarNow = *std::min_element(env.lidar().begin(), env.lidar().end());
+                            c.minLidarNow = now.minLidar;
+                            c.minLidar1s = ago.minLidar;
+                            c.v1s = ago.v;
+                            c.omega = env.robot().angularSpeed();
+                            c.friction = env.frictionUnderRobot();
+                            c.goalDist = distance(pose.pos, env.decision().goal);
                             if (best >= 0) {
                                 const auto b = static_cast<size_t>(best);
                                 c.target = obs[b].isWorker() ? "operario" : "montacargas";
@@ -304,12 +332,14 @@ int main(int argc, char** argv) {
     if (args.has("csv")) {
         std::ofstream f(args.get("csv"));
         f << "escenario,semilla,t,gravedad,contra,v_robot,robot_hacia,obst_hacia,angulo,accion,con_carga,"
-             "hueco_1s,rayos_1s,rayos_ahora,en_obs_1s,en_obs_ahora,a_la_vista_1s,visibles_1s,lidar_min\n";
+             "hueco_1s,rayos_1s,rayos_ahora,en_obs_1s,en_obs_ahora,a_la_vista_1s,visibles_1s,lidar_min,lidar_min_1s,v_1s,"
+             "giro,adherencia,dist_objetivo\n";
         for (const auto& c : all)
             f << c.scenario << ',' << c.seed << ',' << c.time << ',' << c.severity << ',' << c.target << ',' << c.robotV << ','
               << c.robotApproach << ',' << c.obsApproach << ',' << c.bearingDeg << ',' << c.action << ',' << c.carrying << ','
               << c.gap1s << ',' << c.rays1s << ',' << c.raysNow << ',' << c.inObs1s << ',' << c.inObsNow << ',' << c.los1s
-              << ',' << c.losCount1s << ',' << c.minLidarNow << '\n';
+              << ',' << c.losCount1s << ',' << c.minLidarNow << ',' << c.minLidar1s << ',' << c.v1s << ',' << c.omega << ','
+              << c.friction << ',' << c.goalDist << '\n';
     }
     return 0;
 }

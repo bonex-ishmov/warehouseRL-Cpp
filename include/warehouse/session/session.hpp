@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,9 @@ public:
     void setScenarioProvider(ScenarioProvider provider);
     bool hasScenarioProvider() const { return static_cast<bool>(provider_); }
     const ScenarioConfig& scenario() const { return scenario_; }
+    /// Activa o desactiva la capa de seguridad para todos los agentes (reinicia el episodio).
+    void setShield(bool on);
+    bool shieldEnabled() const { return scenario_.shield.enabled; }
     const std::filesystem::path& scenarioPath() const { return scenarioPath_; }
 
     /// Lanza std::exception si la política no se puede crear (p. ej. modelo inválido).
@@ -127,6 +131,7 @@ private:
     PolicyFactory factory_;
     ScenarioProvider provider_;
     ScenarioConfig scenario_;
+    std::optional<bool> shield_;  ///< elegido en la interfaz; si no, lo que diga el escenario
     std::filesystem::path scenarioPath_;
     std::vector<std::unique_ptr<AgentRunner>> runners_;
     uint64_t seed_ = 1;

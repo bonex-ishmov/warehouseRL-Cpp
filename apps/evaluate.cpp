@@ -33,7 +33,8 @@ static std::unique_ptr<Policy> createPolicy(const std::string& name, const std::
 static void usage() {
     std::puts(
         "Uso: wrl_evaluate --policy dwa|random|sac [--model models/sac.pt] --scenario archivo.json [--scenario ...]\n"
-        "                  [--episodes 100] [--seeds 5] [--threads N] [--out results/eval] [--traces 1]");
+        "                  [--episodes 100] [--seeds 5] [--threads N] [--out results/eval] [--traces 1]\n"
+        "                  [--shield on|off]   capa de seguridad (por defecto, la del escenario: activada)");
 }
 
 int main(int argc, char** argv) {
@@ -58,9 +59,11 @@ int main(int argc, char** argv) {
     Json report = Json::object();
     bool allPass = true;
     for (const auto& scenarioPath : args.all("scenario")) {
-        const ScenarioConfig cfg = loadScenario(scenarioPath);
+        ScenarioConfig cfg = loadScenario(scenarioPath);
+        if (args.has("shield")) cfg.shield.enabled = args.get("shield") != "off";
         const int perSeed = std::max(1, episodes / seeds);
-        std::printf("\n== %s  (%s, %d episodios x %d semillas)\n", cfg.name.c_str(), policyName.c_str(), perSeed, seeds);
+        std::printf("\n== %s  (%s%s, %d episodios x %d semillas)\n", cfg.name.c_str(), policyName.c_str(),
+                    cfg.shield.enabled ? " + capa de seguridad" : "", perSeed, seeds);
 
         // Semillas de evaluación disjuntas de las de entrenamiento.
         struct Job { int seedIdx; int ep; uint64_t seed; };
@@ -133,7 +136,7 @@ int main(int argc, char** argv) {
         }
         Json sj = total.toJson();
         sj["completadas_desviacion_semillas"] = std::sqrt(var);
-        report[cfg.name] = {{"resumen", sj}, {"criterios", crit}, {"politica", policyName}};
+        report[cfg.name] = {{"resumen", sj}, {"criterios", crit}, {"politica", policyName}, {"capa_seguridad", cfg.shield.enabled}};
     }
 
     std::ofstream(outDir / "resumen.json") << report.dump(2);

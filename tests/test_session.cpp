@@ -163,3 +163,21 @@ TEST(Sesion, EscenarioNuevoEnCadaEpisodio) {
     s.setScenario(test::smallScenario(1));
     EXPECT_FALSE(s.hasScenarioProvider());
 }
+
+// El interruptor de la interfaz llega a los entornos de todos los agentes y se mantiene
+// al cambiar de escenario.
+TEST(Sesion, InterruptorDeLaCapaDeSeguridad) {
+    Session s = makeSession();
+    s.addAgent({"dwa", "", ""});
+    s.addAgent({"dwa", "", ""});
+    s.setShield(true);
+    EXPECT_TRUE(s.shieldEnabled());
+    for (size_t i = 0; i < 2; ++i) EXPECT_TRUE(s.agent(i).env().config().shield.enabled);
+    s.setShield(false);
+    EXPECT_FALSE(s.shieldEnabled());
+    EXPECT_FALSE(s.agent(1).env().config().shield.enabled);
+    auto cfg = test::smallScenario();
+    cfg.shield.enabled = true;
+    s.setScenario(cfg);
+    EXPECT_FALSE(s.agent(0).env().config().shield.enabled);
+}

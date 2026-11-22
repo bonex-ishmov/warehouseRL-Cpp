@@ -151,6 +151,7 @@ void Session::setScenarioProvider(ScenarioProvider provider) {
 
 void Session::setScenario(ScenarioConfig cfg) {
     provider_ = nullptr;
+    if (shield_) cfg.shield.enabled = *shield_;
     scenario_ = std::move(cfg);
     scenarioPath_.clear();
     // Las políticas se recrean: algunas (DWA) toman los parámetros del robot
@@ -160,6 +161,17 @@ void Session::setScenario(ScenarioConfig cfg) {
     runners_.clear();
     for (auto& s : specs) runners_.push_back(std::make_unique<AgentRunner>(scenario_, s, factory_(s)));
     reset(seed_);
+}
+
+void Session::setShield(bool on) {
+    shield_ = on;
+    if (provider_) {
+        reset(seed_);
+        return;
+    }
+    const auto path = scenarioPath_;
+    setScenario(ScenarioConfig(scenario_));
+    scenarioPath_ = path;
 }
 
 std::string Session::defaultLabel(const AgentSpec& spec) const {
@@ -190,6 +202,7 @@ void Session::reset(uint64_t seed) {
     seed_ = seed;
     if (provider_) {
         scenario_ = provider_(seed);
+        if (shield_) scenario_.shield.enabled = *shield_;
         for (auto& r : runners_) r->reset(seed, scenario_);
     } else {
         for (auto& r : runners_) r->reset(seed);

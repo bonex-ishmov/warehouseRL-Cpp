@@ -44,8 +44,10 @@
     "every": 400000,
     // 10 episodios por escenario: con 4, E5 saltaba ±25 puntos entre validaciones.
     "episodesPerScenario": 10,
-    // Puntaje por escenario = completadas − 0.5·graves con operario/ep − 0.5·incidentes de
-    // carga por entrega − 0.02·choques dañinos/ep (elige modelos seguros, no solo rápidos).
+    // Puntaje por escenario = (1 − w)·completadas + w·a tiempo − 0.5·graves con operario/ep
+    // − 0.5·incidentes de carga por entrega − 0.02·choques dañinos/ep (elige modelos seguros,
+    // no solo rápidos). w = onTimeWeight: 0 en el v12 (el entregado), 0.5 en el v13.
+    "onTimeWeight": 0.0,
     "workerSevereWeight": 0.5, "loadIncidentWeight": 0.5, "harmfulCollisionWeight": 0.02,
     "scenarios": [
       "../scenarios/e1_basico.json", "../scenarios/e2_energia.json", "../scenarios/e3_priorizacion.json",

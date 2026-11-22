@@ -55,7 +55,9 @@ void usage() {
         "               [--threads N] [--device auto|cuda|cpu] [--resume modelo.pt]   (sin CUDA hay que pedir --device cpu)\n"
         "               [--scenario archivo.json]   entrenar en un escenario fijo, sin generador\n"
         "               [--validate-every N]        transiciones entre validaciones\n"
-        "               [--blocking-wait]           esperar a la GPU sin ocupar un núcleo (~2.6 % más lento)");
+        "               [--blocking-wait]           esperar a la GPU sin ocupar un núcleo (~2.6 % más lento)\n"
+        "               [--shield on]               entrenar y validar con la capa de seguridad (por defecto, sin:\n"
+        "                                           así se entrenaron los modelos entregados)");
 }
 
 /// Puntuación de un episodio para el currículo: fracción entregada, rebajada si
@@ -94,6 +96,7 @@ struct Validation {
     int perScenario = 10;
     int threads = 6;
     double workerSevereWeight = 0.5, loadIncidentWeight = 0.5, harmfulCollisionWeight = 0.02;
+    double onTimeWeight = 0.0;  ///< parte del puntaje que es entregar a tiempo (el resto, completar)
 
     struct Result {
         std::vector<MetricsSummary> perScenario;
@@ -131,7 +134,8 @@ struct Validation {
             const MetricsSummary m = MetricsSummary::from(eps);
             const double k = 1.0 / static_cast<double>(scenarios.size());
             const double severe = m.workerSevere / std::max(1, m.episodes);
-            const double sc = m.completionRate - workerSevereWeight * severe - loadIncidentWeight * m.loadIncidentRate -
+            const double tasks = (1.0 - onTimeWeight) * m.completionRate + onTimeWeight * m.onTimeRate;
+            const double sc = tasks - workerSevereWeight * severe - loadIncidentWeight * m.loadIncidentRate -
                               harmfulCollisionWeight * m.harmfulCollisionsPerEpisode;
             r.perScenario.push_back(m);
             r.scenarioScore.push_back(sc);
@@ -224,7 +228,11 @@ int main(int argc, char** argv) {
         }
     }
 
-    const ScenarioConfig firstScenario = fixed ? loadScenario(args.get("scenario")) : generator.base();
+    // La capa de seguridad se aplica al evaluar y en la interfaz; los modelos entregados
+    // se entrenaron sin ella, así que por defecto se entrena sin ella.
+    const bool shield = args.get("shield", "off") == "on";
+    ScenarioConfig firstScenario = fixed ? loadScenario(args.get("scenario")) : generator.base();
+    firstScenario.shield.enabled = shield;
     VecEnv vec(firstScenario, numEnvs, threads, seed);
     const int N = vec.size();
     // Lo sorteado para el episodio en curso de cada entorno y para el siguiente
@@ -235,7 +243,9 @@ int main(int argc, char** argv) {
             Rng rng(mixSeed(s, 0xC0441C0ull));
             const auto sample = curriculum.sample(rng);
             upcoming[static_cast<size_t>(i)] = sample;
-            return generator.generate(sample.difficulty, s);
+            ScenarioConfig gen = generator.generate(sample.difficulty, s);
+            gen.shield.enabled = shield;
+            return gen;
         });
         current = upcoming;
     }
@@ -247,9 +257,13 @@ int main(int argc, char** argv) {
     validation.workerSevereWeight = value(vj, "workerSevereWeight", 0.5);
     validation.loadIncidentWeight = value(vj, "loadIncidentWeight", 0.5);
     validation.harmfulCollisionWeight = value(vj, "harmfulCollisionWeight", 0.02);
+    validation.onTimeWeight = value(vj, "onTimeWeight", 0.0);
     const long validateEvery = static_cast<long>(args.getDouble("validate-every", value(vj, "every", 300000.0)));
     for (const auto& s : vj.value("scenarios", Json::array()))
+    {
         validation.scenarios.push_back(loadScenario(configDir / s.get<std::string>()));
+        validation.scenarios.back().shield.enabled = shield;
+    }
 
     SacAgent agent(obsDim, WarehouseEnv::kActionSize, sac, device);
     if (args.has("resume")) {

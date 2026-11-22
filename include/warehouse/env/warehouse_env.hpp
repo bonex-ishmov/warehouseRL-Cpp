@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "warehouse/core/rng.hpp"
+#include "warehouse/env/safety_shield.hpp"
 #include "warehouse/io/config.hpp"
 #include "warehouse/physics/dynamic_obstacles.hpp"
 #include "warehouse/physics/physics_world.hpp"
@@ -86,6 +87,8 @@ struct EpisodeMetrics {
     int slipSteps = 0;
     double unsafeWorkerTime = 0.0;    ///< s yendo > 0.1 m/s más rápido de lo que permite frenar ante un operario
     double unsafeForkliftTime = 0.0;
+    double unsafeStaticTime = 0.0;    ///< ídem contra muros y estanterías (avance + giro)
+    double shieldTime = 0.0;          ///< s en que la capa de seguridad recortó la consigna
     EndReason reason = EndReason::None;
 
     double completionRate() const { return tasksTotal ? static_cast<double>(delivered) / tasksTotal : 0.0; }
@@ -159,6 +162,11 @@ public:
     /// Exceso de velocidad hacia los obstáculos percibidos respecto a la que permite
     /// frenar a tiempo (m/s), por separado para operarios y montacargas.
     void unsafeSpeed(float& worker, float& forklift) const;
+    /// Exceso de velocidad (m/s) del punto del robot más cercano a un muro o estantería
+    /// sobre la que permite frenar antes de tocarlo.
+    float unsafeStaticSpeed() const;
+    /// La capa de seguridad recortó la consigna en el último paso.
+    bool shieldActive() const { return shieldActive_; }
     const EpisodeMetrics& metrics() const { return metrics_; }
     uint64_t seed() const { return seed_; }
     Action lastAction() const { return lastAction_; }
@@ -194,6 +202,8 @@ private:
     TaskManager tasks_;
     TaskSelector selector_;
     float frictionScale_ = 1.0f;
+    SafetyShield shield_;
+    bool shieldActive_ = false;
     float obstacleSpeedScale_ = 1.0f;
     int pathVersion_ = 0;
     float bestRemaining_ = 0.0f;  ///< menor distancia restante al objetivo actual

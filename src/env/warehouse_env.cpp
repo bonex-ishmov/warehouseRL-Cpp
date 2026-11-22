@@ -1,6 +1,9 @@
 #include "warehouse/env/warehouse_env.hpp"
 
 #include <algorithm>
+#include <cmath>
+
+#include <box2d/collision.h>
 #include <stdexcept>
 
 namespace wrl {
@@ -104,6 +107,7 @@ void WarehouseEnv::reset(uint64_t seed) {
     metrics_.tasksTotal = static_cast<int>(tasks_.tasks().size());
     lastAction_ = {};
     rampV_ = rampW_ = 0.0f;
+    shieldActive_ = false;
     actions_.clear();
     legActive_ = false;
     decision_ = {};
@@ -214,6 +218,7 @@ void WarehouseEnv::handleContacts(StepEvents& ev, Vec2 vBefore) {
         const bool moving = c.other.tag == BodyTag::Forklift || c.other.tag == BodyTag::Worker;
         if (c.other.tag == BodyTag::Worker && s != Severity::Severe) penalty *= r.workerCollisionScale;
         if (moving && dot(vBefore, c.normal) < r.grazeSpeed) penalty *= r.collisionNoFaultScale;
+        if (!moving && s != Severity::Graze) penalty *= r.staticCollisionScale;
         ev.collisionPenalty += penalty;
         if (c.other.tag == BodyTag::Worker) {
             ++ev.workerHits[static_cast<int>(s)];
@@ -386,8 +391,16 @@ StepResult WarehouseEnv::step(const Action& action) {
     if (recordActions_) actions_.push_back(a);
 
     const auto& rp = cfg_.robot;
-    const float vCmd = a.linear >= 0 ? a.linear * rp.maxForwardSpeed : a.linear * rp.maxReverseSpeed;
-    const float wCmd = a.angular * rp.maxAngularSpeed;
+    float vCmd = a.linear >= 0 ? a.linear * rp.maxForwardSpeed : a.linear * rp.maxReverseSpeed;
+    float wCmd = a.angular * rp.maxAngularSpeed;
+    // Capa de seguridad: recorta la consigna antes de la rampa de los motores. La
+    // política (y la memoria de repetición) siguen viendo la acción que pidieron.
+    const auto shielded = shield_.filter(cfg_.shield, rp, map_, obstacles_.obstacles(), robot_.pose(), vCmd, wCmd,
+                                         controlDt());
+    vCmd = shielded.v;
+    wCmd = shielded.w;
+    shieldActive_ = shielded.limited;
+    if (shielded.limited) metrics_.shieldTime += controlDt();
     const float dt = cfg_.sim.physicsDt;
     const auto& rw = cfg_.reward;
     StepEvents& ev = res.events;
@@ -447,9 +460,12 @@ StepResult WarehouseEnv::step(const Action& action) {
     // Señal antes del choque: ir más rápido de lo que permite frenar a tiempo.
     float unsafeWorker = 0.0f, unsafeForklift = 0.0f;
     unsafeSpeed(unsafeWorker, unsafeForklift);
-    reward += (rw.unsafeWorkerPerSecond * unsafeWorker + rw.unsafeForkliftPerSecond * unsafeForklift) * controlDt();
+    const float unsafeStatic = unsafeStaticSpeed();
+    reward += (rw.unsafeWorkerPerSecond * unsafeWorker + rw.unsafeForkliftPerSecond * unsafeForklift +
+               rw.unsafeStaticPerSecond * unsafeStatic) * controlDt();
     if (unsafeWorker > 0.1f) metrics_.unsafeWorkerTime += controlDt();
     if (unsafeForklift > 0.1f) metrics_.unsafeForkliftTime += controlDt();
+    if (unsafeStatic > 0.1f) metrics_.unsafeStaticTime += controlDt();
     reward += rw.loadDestabilized * static_cast<float>(ev.loadDrops);
     reward += rw.criticalOverdue * static_cast<float>(ev.criticalOverdue);
     reward += rw.unnecessaryRecharge * static_cast<float>(ev.unnecessaryRecharges);
@@ -612,6 +628,44 @@ void WarehouseEnv::unsafeSpeed(float& worker, float& forklift) const {
         if (excess <= 0.0f) continue;
         (p.worker ? worker : forklift) = std::max(p.worker ? worker : forklift, excess);
     }
+}
+
+float WarehouseEnv::unsafeStaticSpeed() const {
+    // Los choques graves contra estanterías del v12 eran recortando esquinas: girando a
+    // >1 rad/s y acelerando, la esquina delantera barre la de la estantería. La velocidad
+    // del centro no lo ve; la del punto del robot más cercano (v + ω × r) sí.
+    const auto& rw = cfg_.reward;
+    const Pose pose = robot_.pose();
+    const Vec2 v = robot_.velocity();
+    const float w = robot_.angularSpeed();
+    const float hl = cfg_.robot.halfLength, hw = cfg_.robot.halfWidth;
+    const b2Vec2 robotPts[4] = {{-hl, -hw}, {hl, -hw}, {hl, hw}, {-hl, hw}};
+    b2DistanceInput in{};
+    in.proxyA = b2MakeProxy(robotPts, 4, 0.0f);
+    in.transformA = {toB2(pose.pos), b2MakeRot(pose.theta)};
+    in.transformB = b2Transform_identity;
+    in.useRadii = true;
+    // Más allá de esto no se puede superar la velocidad segura (≥ 1.6 m/s).
+    const float reach = std::hypot(hl, hw) + 1.4f;
+    float worst = 0.0f;
+    auto check = [&](const Rect& r) {
+        if (r.distanceTo(pose.pos) > reach) return;
+        const b2Vec2 pts[4] = {{r.x, r.y}, {r.x + r.w, r.y}, {r.x + r.w, r.y + r.h}, {r.x, r.y + r.h}};
+        in.proxyB = b2MakeProxy(pts, 4, 0.0f);
+        b2SimplexCache cache{};
+        const b2DistanceOutput o = b2ShapeDistance(&in, &cache, nullptr, 0);
+        if (o.distance < 1e-4f) return;  // ya en contacto: lo castiga el choque
+        const Vec2 n = normalized(fromB2(o.normal));
+        const Vec2 arm = fromB2(o.pointA) - pose.pos;
+        const Vec2 vp{v.x - w * arm.y, v.y + w * arm.x};
+        const float own = dot(vp, n);
+        if (own <= 0.0f) return;
+        const float room = std::max(0.0f, o.distance - rw.safetyMarginStatic);
+        worst = std::max(worst, own - std::sqrt(2.0f * rw.safetyDecel * room));
+    };
+    for (const auto& r : map_.walls) check(r);
+    for (const auto& r : map_.shelves) check(r);
+    return worst;
 }
 
 void WarehouseEnv::toLegacyObservation(const SensorParams& s, const float* in, float* out) {

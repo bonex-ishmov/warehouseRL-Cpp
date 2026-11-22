@@ -33,7 +33,8 @@ int main(int argc, char** argv) {
     if (args.has("help")) {
         std::puts(
             "Uso: wrl_viewer --scenario archivo.json [--policy manual|dwa|random|sac] [--model modelo.pt] [--seed N]\n"
-            "     wrl_viewer --replay traza.json");
+            "     wrl_viewer --replay traza.json\n"
+            "     --shield on|off  capa de seguridad (por defecto, la del escenario: activada)");
         std::puts(kHelp);
         return 0;
     }
@@ -49,6 +50,7 @@ int main(int argc, char** argv) {
         mode = "traza (" + trace->policy + ")";
     } else {
         cfg = loadScenario(args.get("scenario", std::string(WRL_SOURCE_DIR) + "/configs/scenarios/demo_mapa_fijo.json"));
+        if (args.has("shield")) cfg.shield.enabled = args.get("shield") != "off";
     }
 
     std::unique_ptr<Policy> policy;

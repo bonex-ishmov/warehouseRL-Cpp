@@ -39,9 +39,16 @@
     "batteryDepleted": -50.0, "unnecessaryRecharge": -2.0, "criticalOverdue": -75.0,
     "restrictedEntry": -5.0, "stalled": -50.0, "stuckPerSecond": -1.0, "stuckGrace": 5.0,
     "contactPerSecond": -1.0, "grazeSpeed": 0.2, "severeSpeed": 0.8,
-    "unsafeWorkerPerSecond": -3.0, "unsafeForkliftPerSecond": -1.5, "safetyDecel": 1.0,
-    "safetyMarginWorker": 0.4, "safetyMarginForklift": 0.2, "safetyLookahead": 1.0,
-    "workerCollisionScale": 2.0, "collisionNoFaultScale": 0.25
+    "unsafeWorkerPerSecond": -3.0, "unsafeForkliftPerSecond": -1.5, "unsafeStaticPerSecond": 0.0,
+    "safetyDecel": 1.0, "safetyMarginWorker": 0.4, "safetyMarginForklift": 0.2, "safetyMarginStatic": 0.1,
+    "safetyLookahead": 1.0, "workerCollisionScale": 2.0, "collisionNoFaultScale": 0.25,
+    "staticCollisionScale": 1.0
+  },
+  // Capa de seguridad entre la política y los motores (SafetyShield). "enabled": false
+  // reproduce el comportamiento con el que se entrenaron los modelos hasta el v13.
+  "shield": {
+    "enabled": true, "decel": 1.0, "marginWorker": 0.4, "marginForklift": 0.2,
+    "marginStatic": 0.1, "lookahead": 1.0, "range": 3.0
   },
   "map": {
     "procedural": { "width": 24, "height": 24, "aisleWidth": 2.6, "shelfDepth": 1.0,

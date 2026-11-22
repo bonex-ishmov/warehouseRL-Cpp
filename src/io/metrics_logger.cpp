@@ -22,7 +22,7 @@ std::string MetricsLogger::header() {
            "colisiones_graves,graves_operario,incidentes_carga,recargas,recargas_innecesarias,zonas_restringidas,"
            "bateria_agotada,energia_wh,distancia_m,ratio_ruta,tiempo_entrega_medio_s,retraso_medio_s,retorno,"
            "tiempo_sim_s,pasos,holgura_min_m,brusquedad_media,aceleracion_media,pasos_derrape,"
-           "inseguro_operario_s,inseguro_montacargas_s";
+           "inseguro_operario_s,inseguro_montacargas_s,inseguro_estatico_s,escudo_s";
 }
 
 std::string MetricsLogger::row(const EpisodeMetrics& m, const std::string& scenario, const std::string& policy, uint64_t seed) {
@@ -36,7 +36,7 @@ std::string MetricsLogger::row(const EpisodeMetrics& m, const std::string& scena
       << (m.delivered ? m.sumDeliveryTime / m.delivered : 0.0) << ',' << (m.late ? m.sumDelay / m.late : 0.0) << ','
       << m.totalReturn << ',' << m.simTime << ',' << m.steps << ',' << m.minClearance << ','
       << (m.steps ? m.sumJerk / m.steps : 0.0) << ',' << (m.simTime > 0 ? m.sumAbsAccel / m.simTime : 0.0) << ','
-      << m.slipSteps << ',' << m.unsafeWorkerTime << ',' << m.unsafeForkliftTime;
+      << m.slipSteps << ',' << m.unsafeWorkerTime << ',' << m.unsafeForkliftTime << ',' << m.unsafeStaticTime << ',' << m.shieldTime;
     return s.str();
 }
 

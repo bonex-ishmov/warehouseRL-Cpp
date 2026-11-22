@@ -117,6 +117,9 @@ void parseReward(const Json& j, RewardParams& r) {
     read(j, "contactPerSecond", r.contactPerSecond);
     read(j, "unsafeWorkerPerSecond", r.unsafeWorkerPerSecond);
     read(j, "unsafeForkliftPerSecond", r.unsafeForkliftPerSecond);
+    read(j, "unsafeStaticPerSecond", r.unsafeStaticPerSecond);
+    read(j, "safetyMarginStatic", r.safetyMarginStatic);
+    read(j, "staticCollisionScale", r.staticCollisionScale);
     read(j, "safetyDecel", r.safetyDecel);
     read(j, "safetyMarginWorker", r.safetyMarginWorker);
     read(j, "safetyMarginForklift", r.safetyMarginForklift);
@@ -220,6 +223,16 @@ Json loadJsonWithBase(const std::filesystem::path& path) {
     return j;
 }
 
+void parseShield(const Json& j, ShieldParams& s) {
+    read(j, "enabled", s.enabled);
+    read(j, "decel", s.decel);
+    read(j, "marginWorker", s.marginWorker);
+    read(j, "marginForklift", s.marginForklift);
+    read(j, "marginStatic", s.marginStatic);
+    read(j, "lookahead", s.lookahead);
+    read(j, "range", s.range);
+}
+
 ScenarioConfig parseScenario(const Json& j) {
     ScenarioConfig c;
     read(j, "name", c.name);
@@ -229,6 +242,7 @@ ScenarioConfig parseScenario(const Json& j) {
     if (j.contains("sensors")) parseSensors(j["sensors"], c.sensors);
     if (j.contains("sim")) parseSim(j["sim"], c.sim);
     if (j.contains("reward")) parseReward(j["reward"], c.reward);
+    if (j.contains("shield")) parseShield(j["shield"], c.shield);
     if (j.contains("map")) parseMap(j["map"], c.map);
     if (j.contains("tasks")) parseTasks(j["tasks"], c.tasks);
     if (j.contains("loadTypes")) {

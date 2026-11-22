@@ -102,7 +102,7 @@ struct RewardParams {
     float loadDestabilized = -40.0f;
     float lateDelivery = -20.0f;
     float latePerSecond = -0.2f;
-    float lateCap = -50.0f;           ///< la entrega tardía resta como máximo esto al premio de entrega
+    float lateCap = -50.0f;           ///< la entrega tardía resta como máximo esto al premio (se alcanza a los 150 s; el v13 probó -90)
     float abandonedTask = -20.0f;     ///< por tarea sin entregar al terminar en fracaso
     float batteryDepleted = -50.0f;
     float unnecessaryRecharge = -2.0f;
@@ -118,12 +118,17 @@ struct RewardParams {
     // avanza en safetyLookahead)). Cada m/s de exceso cuesta esto por segundo.
     float unsafeWorkerPerSecond = -3.0f;
     float unsafeForkliftPerSecond = -1.5f;
+    /// Lo mismo contra muros y estanterías, con la velocidad del punto del robot más
+    /// cercano (avance + giro): así se castiga recortar esquinas girando a fondo.
+    float unsafeStaticPerSecond = 0.0f;  ///< desactivado: el v13 probó -3 sin mejora (ver README)
     float safetyDecel = 1.0f;          ///< m/s², algo menos que la rampa de frenado (1.2)
     float safetyMarginWorker = 0.4f;   ///< m que deben quedar al detenerse
     float safetyMarginForklift = 0.2f;
+    float safetyMarginStatic = 0.1f;
     float safetyLookahead = 1.0f;      ///< s de avance del obstáculo que se descuentan
     float workerCollisionScale = 2.0f; ///< roces y choques leves con operarios cuestan esto veces más
     float collisionNoFaultScale = 0.25f; ///< choque con un obstáculo móvil estando el robot parado o alejándose
+    float staticCollisionScale = 1.0f;   ///< choques leves y graves contra muros y estanterías (el v13 probó 1.5)
     float grazeSpeed = 0.2f;   ///< por debajo: roce
     float severeSpeed = 0.8f;  ///< por encima: grave
 };
@@ -201,6 +206,17 @@ struct DomainRandomization {
     float obstacleSpeed = 0.2f;
 };
 
+/// Capa de seguridad entre la política y los motores (ver SafetyShield).
+struct ShieldParams {
+    bool enabled = false;         ///< configs/robot/default.json la activa; las trazas anteriores no la tienen
+    float decel = 1.0f;           ///< m/s², algo menos que la rampa de frenado (1.2)
+    float marginWorker = 0.4f;    ///< m que deben quedar al detenerse
+    float marginForklift = 0.2f;
+    float marginStatic = 0.1f;
+    float lookahead = 1.0f;       ///< s de avance del obstáculo hacia el robot que se descuentan
+    float range = 3.0f;           ///< m: más allá no se puede superar la velocidad segura
+};
+
 struct ScenarioConfig {
     std::string name = "sin_nombre";
     std::string description;
@@ -214,6 +230,7 @@ struct ScenarioConfig {
     SensorParams sensors;
     SimParams sim;
     RewardParams reward;
+    ShieldParams shield;
     DomainRandomization randomization;
     Json acceptance = Json::object();
     Json raw;  ///< JSON completo ya fusionado (para trazas)

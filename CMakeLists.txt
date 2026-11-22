@@ -55,6 +55,7 @@ add_library(wrl_core STATIC
     src/sim/task_selector.cpp
     src/sim/scenario_generator.cpp
     src/env/warehouse_env.cpp
+    src/env/safety_shield.cpp
     src/env/vec_env.cpp
     src/env/policies.cpp
     src/session/session.cpp)

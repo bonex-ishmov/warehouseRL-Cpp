@@ -534,6 +534,12 @@ void GuiApp::playbackSection() {
         ImGui::SetTooltip("Simula tan rápido como permite la CPU; útil para acumular\nestadísticas de muchos episodios.");
     bool autoAdvance = session_.autoAdvance();
     if (ImGui::Checkbox("Pasar al siguiente episodio al terminar", &autoAdvance)) session_.setAutoAdvance(autoAdvance);
+    bool shield = session_.shieldEnabled();
+    if (ImGui::Checkbox("Capa de seguridad", &shield)) session_.setShield(shield);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Recorta la consigna de cualquier agente para que no se acerque a\n"
+                          "muros, estanterías u obstáculos más rápido de lo que puede frenar\n"
+                          "(como el escáner de seguridad de un AGV). Reinicia el episodio.");
 }
 
 void GuiApp::viewSection() {

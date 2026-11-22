@@ -78,6 +78,28 @@ TEST(Sensores, DistanciaEntreSuperficiesYTipoDeObstaculo) {
     EXPECT_GT(forklifts, 0);
 }
 
+// Velocidad insegura contra lo estático: parado no hay exceso; yendo a fondo en
+// línea recta contra lo que haya delante, el exceso aparece antes del choque.
+TEST(Entorno, VelocidadInseguraContraEstanterias) {
+    auto cfg = test::repoScenario("e1_basico.json");
+    cfg.shield.enabled = false;  // se trata justamente de chocar
+    WarehouseEnv env(cfg);
+    env.reset(5);
+    EXPECT_LT(env.unsafeStaticSpeed(), 1e-3f);
+    float maxBefore = 0.0f;
+    bool hit = false;
+    for (int i = 0; i < 400 && !env.done(); ++i) {
+        const float u = env.unsafeStaticSpeed();
+        EXPECT_GE(u, 0.0f);
+        env.step(Action{1.0f, 0.0f});
+        const auto& c = env.metrics().collisions;
+        if (c[0] + c[1] + c[2] > 0) { hit = true; break; }
+        maxBefore = std::max(maxBefore, u);
+    }
+    ASSERT_TRUE(hit);
+    EXPECT_GT(maxBefore, 0.3f);
+}
+
 // Los modelos anteriores al v11 (77 observaciones) siguen funcionando: la política
 // recibe la observación en su formato, con los obstáculos ordenados por centro.
 TEST(Entorno, ObservacionCompatibleConModelosAnteriores) {
@@ -167,6 +189,7 @@ TEST(Entorno, BateriaAgotadaTerminaElEpisodio) {
 TEST(Entorno, ChoqueContraUnMuroSeDetecta) {
     auto cfg = test::smallScenario();
     cfg.map.robotStart = Pose{{3.0f, 5.0f}, 0.0f};  // de frente a la estantería (x = 6)
+    cfg.shield.enabled = false;
     WarehouseEnv env(cfg);
     env.reset(1);
     int harmful = 0;
@@ -176,6 +199,46 @@ TEST(Entorno, ChoqueContraUnMuroSeDetecta) {
     }
     EXPECT_GE(harmful, 1);
     EXPECT_LT(env.robot().position().x, 6.0f);
+}
+
+// Con la capa de seguridad, la misma consigna a fondo contra la estantería frena a
+// tiempo: ningún contacto y el robot queda parado cerca del margen.
+TEST(CapaSeguridad, FrenaAntesDeLaEstanteria) {
+    auto cfg = test::smallScenario();
+    cfg.map.robotStart = Pose{{3.0f, 5.0f}, 0.0f};
+    cfg.shield.enabled = true;
+    WarehouseEnv env(cfg);
+    env.reset(1);
+    int contacts = 0, limited = 0;
+    for (int i = 0; i < 60; ++i) {
+        const auto r = env.step({1.0f, 0.0f});
+        contacts += r.events.collisions[0] + r.events.collisions[1] + r.events.collisions[2];
+        limited += env.shieldActive() ? 1 : 0;
+    }
+    EXPECT_EQ(contacts, 0);
+    EXPECT_GT(limited, 0);
+    const float front = env.robot().position().x + cfg.robot.halfLength;
+    EXPECT_LT(front, 6.0f);
+    EXPECT_GT(front, 6.0f - 0.4f);  // no se queda exageradamente lejos
+    EXPECT_LT(std::abs(env.robot().forwardSpeed()), 0.05f);
+    EXPECT_GT(env.metrics().shieldTime, 0.0);
+}
+
+// Sin nada cerca la capa no toca la consigna, y la velocidad permitida crece con el hueco.
+TEST(CapaSeguridad, NoIntervieneEnEspacioLibre) {
+    EXPECT_FLOAT_EQ(SafetyShield::allowedClosing(0.0f, 1.0f, 0.1f), 0.0f);
+    EXPECT_LT(SafetyShield::allowedClosing(0.3f, 1.0f, 0.1f), SafetyShield::allowedClosing(1.0f, 1.0f, 0.1f));
+    // v·T + v²/(2a) = hueco
+    const float v = SafetyShield::allowedClosing(1.0f, 1.0f, 0.1f);
+    EXPECT_NEAR(v * 0.1f + v * v / 2.0f, 1.0f, 1e-4f);
+
+    auto cfg = test::smallScenario();
+    cfg.map.robotStart = Pose{{3.0f, 5.0f}, 0.0f};
+    cfg.shield.enabled = true;
+    WarehouseEnv env(cfg);
+    env.reset(1);
+    env.step({0.2f, 0.0f});  // a 2.7 m de la estantería y despacio: nada que recortar
+    EXPECT_FALSE(env.shieldActive());
 }
 
 TEST(Entorno, TrazaReproduceElEpisodio) {
