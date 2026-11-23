@@ -481,7 +481,7 @@ Mediciones alternando ejecuciones:
 ## Resultados
 
 Ver `docs/RESULTADOS.md` (tablas generadas con `tools/reporte.py` a partir de
-`wrl_evaluate`). Lo entregado es `models/sac_final.pt` (v14: el v12 afinado con la capa de
+`wrl_evaluate`) y el informe completo del proyecto en `docs/INFORME.md`. Lo entregado es `models/sac_final.pt` (v14: el v12 afinado con la capa de
 seguridad, elegido por validación) con la capa activada, frente a la línea base A* + DWA con
 la misma capa y al v12 con capa (`models/sac_v12.pt`); 100 episodios por escenario:
 
@@ -504,8 +504,9 @@ la misma capa y al v12 con capa (`models/sac_v12.pt`); 100 episodios por escenar
 \* Fuera de la distribución de entrenamiento y de validación.
 
 Con la misma capa, SAC v14 completa tanto como DWA (más en todos los escenarios salvo E5,
-con 1.7 puntos menos), entrega a tiempo igual o más y tarda menos por entrega, con un número parecido de
-choques graves con operarios. Sigue rozando más y dejando caer más cargas (3–5 % frente a
+con 1.7 puntos menos) y entrega a tiempo igual o más, con un número parecido de choques
+graves con operarios. Tarda menos por entrega en E1–E4 y más en E5–E7, donde gasta también
+más energía por entrega. Sigue rozando más y dejando caer más cargas (3–5 % frente a
 < 2 %). Sin capa, la línea base A* + DWA completaba 87 % en E5 y el v12 89 % con 5 choques
 graves con operarios (ver `docs/RESULTADOS.md`). `models/sac_v12.pt`, `models/sac_v10.pt` y
 `models/sac_v9.pt` quedan como modelos anteriores (el v9, antes de corregir la recompensa,
