@@ -19,18 +19,25 @@ public:
     struct Result {
         float v = 0.0f, w = 0.0f;  ///< consigna resultante, m/s y rad/s
         bool limited = false;      ///< la capa recortó la consigna
+        bool loadLimited = false;  ///< ... para no desestabilizar la carga en una curva
     };
 
     /// v, w: consigna pedida por la política. pose: estado actual del robot.
     /// controlDt: cuánto se mantiene la consigna antes de volver a decidir (s).
+    /// vNow: velocidad de avance actual. loadLateralLimit: límite lateral de la carga que
+    /// lleva (m/s²), 0 si va vacío.
     Result filter(const ShieldParams& p, const RobotParams& rp, const WarehouseMap& map,
                   const std::vector<DynamicObstacle>& obstacles, Pose pose, float v, float w,
-                  float controlDt) const;
+                  float controlDt, float vNow = 0.0f, float loadLateralLimit = 0.0f) const;
 
     /// Velocidad máxima de acercamiento con hueco room (m) y decisión cada controlDt.
     static float allowedClosing(float room, float decel, float controlDt);
 
 private:
+    Result avoidObstacles(const ShieldParams& p, const RobotParams& rp, const WarehouseMap& map,
+                          const std::vector<DynamicObstacle>& obstacles, Pose pose, float v, float w,
+                          float controlDt) const;
+
     /// Restricción lineal sobre la consigna: alpha·v + beta·w <= bound.
     struct Constraint {
         float alpha, beta, bound;

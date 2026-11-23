@@ -1,0 +1,17 @@
+{
+  // Entrenamiento con la capa de seguridad (configs/agent/sac_capa.json). Con la capa
+  // los choques los evita ella, así que:
+  //  - pedir algo que la capa tenga que recortar cuesta (si no, sale gratis y el agente
+  //    aprende a ir a fondo y dejar que frene la capa);
+  //  - el castigo por velocidad insegura ante obstáculos sobra (la capa ya lo impide) y fue
+  //    lo que volvió indeciso al v11;
+  //  - el retraso sigue pesando hasta los 350 s (tope -90): el v13 mostró que mejora la
+  //    puntualidad; lo que falló entonces (más choques) lo cubre ahora la capa.
+  "base": "default.json",
+  "shield": { "enabled": true },
+  "reward": {
+    "shieldInterventionPerSecond": -2.0,
+    "unsafeWorkerPerSecond": 0.0, "unsafeForkliftPerSecond": 0.0,
+    "lateCap": -90.0
+  }
+}

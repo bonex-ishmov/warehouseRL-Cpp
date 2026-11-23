@@ -120,6 +120,7 @@ void parseReward(const Json& j, RewardParams& r) {
     read(j, "unsafeStaticPerSecond", r.unsafeStaticPerSecond);
     read(j, "safetyMarginStatic", r.safetyMarginStatic);
     read(j, "staticCollisionScale", r.staticCollisionScale);
+    read(j, "shieldInterventionPerSecond", r.shieldInterventionPerSecond);
     read(j, "safetyDecel", r.safetyDecel);
     read(j, "safetyMarginWorker", r.safetyMarginWorker);
     read(j, "safetyMarginForklift", r.safetyMarginForklift);
@@ -231,6 +232,7 @@ void parseShield(const Json& j, ShieldParams& s) {
     read(j, "marginStatic", s.marginStatic);
     read(j, "lookahead", s.lookahead);
     read(j, "range", s.range);
+    read(j, "loadLateralFraction", s.loadLateralFraction);
 }
 
 ScenarioConfig parseScenario(const Json& j) {

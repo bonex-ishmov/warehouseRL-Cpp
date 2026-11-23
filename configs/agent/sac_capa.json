@@ -1,0 +1,16 @@
+{
+  // Afinado de un modelo entrenado sin capa (el v12) con la capa de seguridad activa:
+  //   wrl_train --config configs/agent/sac_capa.json --resume runs/sac_v12_culpa/mejor_validacion.pt --out runs/...
+  // Todo lo demás, igual que sac.json.
+  "base": "sac.json",
+  "training": {
+    "shield": true,
+    "totalSteps": 4000000,       // ~30 min: afinar, no empezar de cero
+    "warmupPolicy": "actor"      // el calentamiento usa el modelo cargado, no demostraciones de DWA
+  },
+  "generator": { "base": "../robot/capa.json" },
+  "validation": {
+    "every": 400000,
+    "onTimeWeight": 0.5          // la capa cuida la seguridad; la validación premia además la puntualidad
+  }
+}

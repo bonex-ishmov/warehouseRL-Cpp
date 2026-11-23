@@ -45,6 +45,19 @@ struct Snapshot {
     std::vector<ObsView> views;
     int losCount = 0;     ///< obstáculos en rango y a la vista (antes de quedarse con los N más cercanos)
     float minLidar = 0.0f;
+    float w = 0.0f;
+};
+
+/// Una caída de carga: qué aceleración la tiró y qué hacía el robot.
+struct LoadDrop {
+    int type = 0;
+    float ax = 0.0f, ay = 0.0f;       ///< aceleración filtrada en el marco del robot, m/s²
+    float limX = 0.0f, limY = 0.0f;   ///< límites de ese tipo de carga
+    float v = 0.0f, w = 0.0f;         ///< antes del paso
+    float actionV = 0.0f, actionW = 0.0f;
+    bool collided = false;            ///< hubo un choque en el mismo paso
+    bool shield = false;              ///< la capa de seguridad recortó la consigna
+    float vAfter = 0.0f, wAfter = 0.0f, slip = 0.0f;  ///< después del paso; slip = velocidad lateral
 };
 
 struct Collision {
@@ -94,6 +107,7 @@ Snapshot capture(const WarehouseEnv& env) {
     s.v = env.robot().forwardSpeed();
     s.action = env.lastAction();
     s.minLidar = *std::min_element(env.lidar().begin(), env.lidar().end());
+    s.w = env.robot().angularSpeed();
     const auto& obs = env.obstacles();
     s.views.resize(obs.size());
 
@@ -123,6 +137,46 @@ Snapshot capture(const WarehouseEnv& env) {
             if ((p.worldPos - o.pos).lengthSq() < 1e-6f) v.inObs = true;
     }
     return s;
+}
+
+void printDrops(const ScenarioConfig& cfg, const std::vector<LoadDrop>& ds) {
+    if (ds.empty()) return;
+    const int n = static_cast<int>(ds.size());
+    int lateral = 0, longi = 0, both = 0, collided = 0, shield = 0, braking = 0;
+    double sumVW = 0, sumV = 0, sumW = 0;
+    std::vector<int> byType(cfg.loadTypes.size(), 0);
+    for (const auto& d : ds) {
+        const bool la = std::abs(d.ay) > d.limY, lo = std::abs(d.ax) > d.limX;
+        if (la && lo) ++both;
+        else if (la) ++lateral;
+        else ++longi;
+        if (d.collided) ++collided;
+        if (d.shield) ++shield;
+        if (lo && d.ax < 0 && d.v > 0) ++braking;
+        sumVW += std::abs(d.v * d.w), sumV += std::abs(d.v), sumW += std::abs(d.w);
+        ++byType[static_cast<size_t>(d.type)];
+    }
+    auto pct = [n](int a) { return 100.0 * a / n; };
+    std::printf("\n  caídas de carga %d: lateral %.0f%%, longitudinal %.0f%% (frenando %.0f%%), ambas %.0f%% | "
+                "con choque en el mismo paso %.0f%% | capa activa %.0f%%\n",
+                n, pct(lateral), pct(longi), pct(braking), pct(both), pct(collided), pct(shield));
+    // Sin choque: ¿la curva (v·giro) ya superaba el límite lateral, o fue un derrape?
+    int curve = 0, noColl = 0;
+    double slip = 0, vwAfter = 0;
+    for (const auto& d : ds) {
+        if (d.collided) continue;
+        ++noColl;
+        vwAfter += std::abs(d.vAfter * d.wAfter);
+        slip += std::abs(d.slip);
+        if (std::abs(d.vAfter * d.wAfter) > 0.8f * d.limY) ++curve;
+    }
+    if (noColl)
+        std::printf("    sin choque (%d): |v·giro| después %.2f m/s², > 80%% del límite lateral %.0f%%, |vel. lateral| %.2f m/s\n",
+                    noColl, vwAfter / noColl, 100.0 * curve / noColl, slip / noColl);
+    std::printf("    antes: |v| %.2f m/s, |giro| %.2f rad/s, |v·giro| %.2f m/s² | por tipo:", sumV / n, sumW / n, sumVW / n);
+    for (size_t t = 0; t < byType.size(); ++t)
+        if (byType[t]) std::printf(" %s %d", cfg.loadTypes[t].name.c_str(), byType[t]);
+    std::printf("\n");
 }
 
 std::unique_ptr<Policy> createPolicy(const std::string& name, const std::string& model) {
@@ -235,6 +289,7 @@ int main(int argc, char** argv) {
                 jobs.push_back(mixSeed(0xE7A1'0000ull + static_cast<uint64_t>(s) * 7919ull, static_cast<uint64_t>(e)));
 
         std::vector<Collision> found;
+        std::vector<LoadDrop> drops;
         std::mutex mu;
         std::atomic<size_t> next{0};
         auto worker = [&] {
@@ -248,11 +303,22 @@ int main(int argc, char** argv) {
                 std::deque<Snapshot> hist;
                 hist.push_back(capture(env));
                 std::vector<Collision> local;
+                std::vector<LoadDrop> localDrops;
                 while (true) {
                     const EpisodeMetrics before = env.metrics();
                     const bool carrying = env.carryingTask() >= 0;
                     const StepResult r = env.step(policy->act(env));
                     const EpisodeMetrics& after = env.metrics();
+                    if (r.events.loadDrops > 0 && r.events.loadDropType >= 0) {
+                        const auto& lt = cfg.loadTypes[static_cast<size_t>(r.events.loadDropType)];
+                        const auto& e = r.events;
+                        localDrops.push_back({e.loadDropType, e.loadDropAccel.x, e.loadDropAccel.y, lt.longitudinalLimit,
+                                              lt.lateralLimit, hist.back().v, hist.back().w, env.lastAction().linear,
+                                              env.lastAction().angular,
+                                              e.collisions[0] + e.collisions[1] + e.collisions[2] > 0, env.shieldActive(),
+                                              env.robot().forwardSpeed(), env.robot().angularSpeed(),
+                                              env.robot().lateralSpeed()});
+                    }
                     for (int sev = 0; sev < 3; ++sev) {
                         for (int k = 0; k < after.collisions[sev] - before.collisions[sev]; ++k) {
                             const Snapshot& now = hist.back();
@@ -318,6 +384,7 @@ int main(int argc, char** argv) {
                 }
                 std::lock_guard lock(mu);
                 found.insert(found.end(), local.begin(), local.end());
+                drops.insert(drops.end(), localDrops.begin(), localDrops.end());
             }
         };
         std::vector<std::thread> pool;
@@ -326,6 +393,7 @@ int main(int argc, char** argv) {
 
         std::printf("\n== %s (%s, %zu episodios)", cfg.name.c_str(), policyName.c_str(), jobs.size());
         printSummary(found, static_cast<int>(jobs.size()));
+        printDrops(cfg, drops);
         all.insert(all.end(), found.begin(), found.end());
     }
 

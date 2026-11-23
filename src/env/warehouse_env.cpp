@@ -163,6 +163,8 @@ void WarehouseEnv::physicsStep(float dt, float vCmd, float wCmd, StepEvents& ev,
         const LoadType& load = cfg_.loadTypes[static_cast<size_t>(tasks_.get(carrying_).loadType)];
         const Vec2 local = toLocal(accelFiltered_, pose.theta);
         if (std::abs(local.x) > load.longitudinalLimit || std::abs(local.y) > load.lateralLimit) {
+            ev.loadDropAccel = local;
+            ev.loadDropType = tasks_.get(carrying_).loadType;
             tasks_.markDropped(carrying_);
             robot_.setPayload(0.0f);
             carrying_ = -1;
@@ -395,8 +397,12 @@ StepResult WarehouseEnv::step(const Action& action) {
     float wCmd = a.angular * rp.maxAngularSpeed;
     // Capa de seguridad: recorta la consigna antes de la rampa de los motores. La
     // política (y la memoria de repetición) siguen viendo la acción que pidieron.
+    const float loadLateral =
+        carrying_ >= 0 ? cfg_.loadTypes[static_cast<size_t>(tasks_.get(carrying_).loadType)].lateralLimit : 0.0f;
     const auto shielded = shield_.filter(cfg_.shield, rp, map_, obstacles_.obstacles(), robot_.pose(), vCmd, wCmd,
-                                         controlDt());
+                                         controlDt(), robot_.forwardSpeed(), loadLateral);
+    const float cutV = (vCmd - shielded.v) / rp.maxForwardSpeed, cutW = (wCmd - shielded.w) / rp.maxAngularSpeed;
+    const float shieldCut = std::sqrt(cutV * cutV + cutW * cutW);
     vCmd = shielded.v;
     wCmd = shielded.w;
     shieldActive_ = shielded.limited;
@@ -405,6 +411,7 @@ StepResult WarehouseEnv::step(const Action& action) {
     const auto& rw = cfg_.reward;
     StepEvents& ev = res.events;
     float reward = 0.0f;
+    reward += rw.shieldInterventionPerSecond * shieldCut * controlDt();
 
     const float phi0 = potential();
     const int version0 = pathVersion_;

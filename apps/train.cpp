@@ -56,8 +56,8 @@ void usage() {
         "               [--scenario archivo.json]   entrenar en un escenario fijo, sin generador\n"
         "               [--validate-every N]        transiciones entre validaciones\n"
         "               [--blocking-wait]           esperar a la GPU sin ocupar un núcleo (~2.6 % más lento)\n"
-        "               [--shield on]               entrenar y validar con la capa de seguridad (por defecto, sin:\n"
-        "                                           así se entrenaron los modelos entregados)");
+        "               [--shield on|off]           entrenar y validar con la capa de seguridad (por defecto, lo que\n"
+        "                                           diga \"training.shield\": sac.json sin ella, sac_capa.json con ella)");
 }
 
 /// Puntuación de un episodio para el currículo: fracción entregada, rebajada si
@@ -230,7 +230,7 @@ int main(int argc, char** argv) {
 
     // La capa de seguridad se aplica al evaluar y en la interfaz; los modelos entregados
     // se entrenaron sin ella, así que por defecto se entrena sin ella.
-    const bool shield = args.get("shield", "off") == "on";
+    const bool shield = args.has("shield") ? args.get("shield") == "on" : value(tj, "shield", false);
     ScenarioConfig firstScenario = fixed ? loadScenario(args.get("scenario")) : generator.base();
     firstScenario.shield.enabled = shield;
     VecEnv vec(firstScenario, numEnvs, threads, seed);
@@ -340,6 +340,13 @@ int main(int argc, char** argv) {
         std::printf(") %s[%.0f s]\n", best ? "-> nuevo mejor modelo " : "", std::chrono::duration<double>(Clock::now() - t0).count());
     };
 
+    // Al afinar un modelo, el de partida compite también por mejor_validacion.pt: si
+    // ningún punto del afinado lo supera, queda él.
+    if (args.has("resume")) {
+        std::printf("Validación del modelo de partida:\n");
+        validate();
+    }
+
     // Desglose del tiempo por iteración (para saber qué limita la velocidad).
     double tAct = 0, tUpd = 0, tSim = 0, tRest = 0;
     auto lap = [](Clock::time_point& t) {
@@ -351,11 +358,12 @@ int main(int argc, char** argv) {
 
     while (steps < totalSteps && !gStop) {
         auto tp = Clock::now();
-        // 1) Acciones. En la fase de calentamiento se usan demostraciones (DWA con ruido).
+        // 1) Acciones. En la fase de calentamiento se usan demostraciones (DWA con ruido),
+        //    acciones al azar o, al afinar un modelo ("actor"), el propio modelo cargado.
         std::memcpy(obsHost.data_ptr<float>(), vec.observations(), sizeof(float) * static_cast<size_t>(N * obsDim));
         const auto obsDev = obsHost.to(device, /*non_blocking=*/true);
         torch::Tensor actDev;
-        if (steps < warmup) {
+        if (steps < warmup && warmupPolicy != "actor") {
             float* a = actHost.data_ptr<float>();
             if (warmupPolicy == "dwa") {
                 vec.parallelFor([&](int i) {

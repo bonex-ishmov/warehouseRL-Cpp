@@ -84,7 +84,9 @@ Opciones útiles:
 #    Ctrl+C guarda el modelo. --resume modelo.pt para continuar (recupera los niveles).
 #    --scenario archivo.json entrena en un escenario fijo, sin generador.
 #    --blocking-wait libera el núcleo que espera a la GPU (≈2.6 % más lento).
-#    --shield on entrena con la capa de seguridad (por defecto, sin ella, como el v12).
+#    --shield on|off fuerza la capa de seguridad (por defecto: sac.json sin ella, sac_capa.json con ella).
+# Afinar un modelo con la capa de seguridad activa (así salió el v14, ~30 min):
+./build/wrl_train --config configs/agent/sac_capa.json --resume runs/sac_v12_culpa/mejor_validacion.pt --out runs/sac_v14_capa
 ./build/wrl_bench_sac        # mide cuánto tarda una actualización de SAC (fija la velocidad del entrenamiento)
 ./build/wrl_collisions --policy sac --scenario configs/scenarios/e5_combinado.json   # analiza cada choque
 ./build/wrl_validate --generator 30   # comprueba el generador con la línea base A* + DWA
@@ -99,7 +101,7 @@ python3 tools/comparar.py results/eval_dwa results/eval_sac   # comparar evaluac
 # 5. Interfaz gráfica: ver y comparar agentes entrenados (por defecto, SAC frente a A* + DWA en E1)
 ./build/wrl_gui
 ./build/wrl_gui --scenario configs/scenarios/e4_dinamico.json \
-    --agent sac:models/sac_final.pt --agent sac:models/sac_v10.pt --agent dwa
+    --agent sac:models/sac_final.pt --agent sac:models/sac_v12.pt --agent dwa
 
 # 6. Visor sencillo, reproducción de trazas y capturas
 ./build/wrl_viewer --scenario configs/scenarios/demo_mapa_fijo.json            # conducción manual
@@ -351,7 +353,44 @@ Con la capa, el v12 en E5 + E7 baja de 2.2 a 0.45 choques por episodio contra es
 obstáculos que se le echan encima: en el 73–83 % de los choques graves con montacargas el
 robot se estaba apartando y el montacargas, que no cede el paso en los cruces, avanzaba
 hacia él. La capa está activada en `configs/robot/default.json`, en la evaluación y en la
-interfaz; el entrenamiento por defecto no la usa (los modelos se entrenaron sin ella).
+interfaz.
+
+**Límite lateral con carga.** `wrl_collisions` también registra cada caída de carga. Con el v12
+y la capa, en E5 y E7 el 27–40 % coincidían con un choque y, de las demás, en el 50–66 % el
+robot terminaba el paso con velocidad × giro por encima del 80 % del límite lateral de la
+carga (cerraba la curva o aceleraba en ella; la frágil era dos tercios). Con carga, la capa
+limita |v·giro| al 70 % del límite lateral de esa carga (`loadLateralFraction`), escalando
+avance y giro juntos (conserva la curva pedida y no rompe las restricciones de obstáculos) y
+contando la velocidad actual, porque la rampa tarda en frenar. Sin entrenar nada, las caídas
+del v12 bajan de 7.1 % a 3.4 % en E5 y de 5.6 % a 2.4 % en E6.
+
+### v14: afinado con la capa de seguridad
+
+Un modelo entrenado sin capa no sabe que existe: pide cosas que ella recorta y nunca aprendió
+qué hacer entonces. Entrenar con ella activa (`configs/agent/sac_capa.json` +
+`configs/robot/capa.json`) requiere tres cambios:
+
+1. **Lo que la capa recorta cuesta** (`shieldInterventionPerSecond` = −2 por segundo y por la
+   distancia normalizada entre la consigna pedida y la ejecutada). La memoria de repetición
+   guarda la acción pedida; sin este castigo, todo lo que la capa recorta a lo mismo vale lo
+   mismo para el crítico, el actor no recibe gradiente ahí y aprende a ir a fondo y dejar que
+   frene la capa.
+2. **Sin el castigo por velocidad insegura ante obstáculos**, que la capa ya impide (y que fue lo
+   que volvió indeciso al v11), y **con el tope de retraso del v13** (−90) y la puntualidad en la
+   validación (`onTimeWeight` = 0.5): lo que falló en el v13, más choques, lo cubre la capa.
+3. **Afinar en vez de empezar de cero:** `--resume` desde el v12 durante 4 M de transiciones
+   (28 min). El calentamiento usa el propio modelo (`warmupPolicy: "actor"`) en vez de
+   demostraciones de DWA, y el modelo de partida se valida primero y compite por
+   `mejor_validacion.pt` (así el afinado no puede empeorar lo que la validación mide).
+
+El mejor punto (2.4 M) completa lo mismo que el v12 con capa y entrega a tiempo más (E3: 91.5 %
+→ 98 %, E5: 49 % → 54 %, E6: 59 % → 66 %, E7: 51 % → 56 %), con 3 choques graves con
+operarios en E4–E7 frente a 5. El modelo del final del afinado (4 M) es peor (E5: 79 %).
+
+**El v14 depende de la capa:** sin ella tira el 89 % de las cargas en E4 y tiene 28 choques
+graves con operarios (aprendió que la capa limita las curvas y las frenadas). Hay que usarlo
+siempre con la capa activada, que es como viene configurado; el interruptor de la interfaz
+sirve para comparar, no para usarlo así.
 
 `wrl_validate --generator N` resuelve N escenarios por nivel con A* + DWA y muestra el
 resultado por nivel, por dimensión aislada y quitando una dimensión cada vez. Con 30 por
@@ -442,33 +481,33 @@ Mediciones alternando ejecuciones:
 ## Resultados
 
 Ver `docs/RESULTADOS.md` (tablas generadas con `tools/reporte.py` a partir de
-`wrl_evaluate`). Lo entregado es `models/sac_final.pt` (v12, elegido por la validación con
-seguridad) con la capa de seguridad, frente a la línea base A* + DWA y al v12 sin capa;
-100 episodios por escenario:
+`wrl_evaluate`). Lo entregado es `models/sac_final.pt` (v14: el v12 afinado con la capa de
+seguridad, elegido por validación) con la capa activada, frente a la línea base A* + DWA con
+la misma capa y al v12 con capa (`models/sac_v12.pt`); 100 episodios por escenario:
 
-| Escenario | Completadas DWA | SAC v12 + capa | SAC v12 sin capa | A tiempo DWA | SAC v12 + capa | SAC v12 sin capa |
+| Escenario | Completadas DWA + capa | SAC v14 + capa | SAC v12 + capa | A tiempo DWA + capa | SAC v14 + capa | SAC v12 + capa |
 |---|---|---|---|---|---|---|
-| E1 básico | 98.0 % | **100 %** | **100 %** | 98.0 % | **100 %** | **100 %** |
-| E2 energía | 95.2 % | 99.2 % | **100 %** | 95.2 % | 99.2 % | **100 %** |
-| E3 priorización | 94.3 % | **97.8 %** | 96.8 % | 83.7 % | **92.7 %** | 91.0 % |
-| E4 dinámico | 95.2 % | **100 %** | 98.0 % | 95.2 % | **100 %** | 98.0 % |
-| E5 combinado | 87.3 % | **96.5 %** | 89.3 % | **50.7 %** | 48.9 % | 47.9 % |
-| E6 generalización* | **95.9 %** | 95.8 % | 93.1 % | **61.8 %** | 57.6 % | 52.6 % |
-| E7 robustez física* | 88.1 % | **93.1 %** | 86.3 % | **49.2 %** | 47.7 % | 46.1 % |
+| E1 básico | 99.0 % | **100 %** | **100 %** | 99.0 % | **100 %** | **100 %** |
+| E2 energía | 96.2 % | **100 %** | 99.4 % | 96.2 % | **100 %** | 99.4 % |
+| E3 priorización | 97.3 % | **98.6 %** | 96.5 % | 86.6 % | **98.0 %** | 91.5 % |
+| E4 dinámico | 98.6 % | 98.8 % | **99.6 %** | 98.6 % | 98.8 % | **99.6 %** |
+| E5 combinado | **93.4 %** | 91.7 % | 92.0 % | 53.3 % | **53.6 %** | 49.1 % |
+| E6 generalización* | 95.6 % | 96.6 % | **96.7 %** | 59.7 % | **66.3 %** | 58.8 % |
+| E7 robustez física* | 93.4 % | **94.3 %** | 94.0 % | 51.2 % | **56.4 %** | 50.7 % |
 
-| Seguridad (E4 / E5 / E6 / E7) | DWA | SAC v12 + capa | SAC v12 sin capa |
+| Seguridad (E4 / E5 / E6 / E7) | DWA + capa | SAC v14 + capa | SAC v12 + capa |
 |---|---|---|---|
-| Choques graves con operarios (en 100 episodios) | 1 / 0 / 0 / 1 | 0 / 2 / 0 / 1 | 2 / 5 / 2 / 12 |
-| Roces por episodio | 0.3 / 1.0 / 0.3 / 1.3 | 0.7 / 1.5 / 0.8 / 1.5 | 1.8 / 5.0 / 2.4 / 3.9 |
-| Incidentes de carga por entrega | 2.1 / 1.6 / 0.6 / 1.6 % | 7.6 / 7.1 / 5.6 / 6.6 % | 15.7 / 10.6 / 9.8 / 11.4 % |
+| Choques graves con operarios (en 100 episodios) | 0 / 0 / 1 / 2 | 2 / 0 / 0 / 1 | 1 / 0 / 0 / 4 |
+| Roces por episodio | 0.4 / 0.5 / 0.3 / 0.7 | 0.7 / 1.7 / 0.8 / 1.6 | 0.5 / 1.6 / 0.7 / 1.2 |
+| Incidentes de carga por entrega | 1.6 / 1.4 / 1.5 / 1.7 % | 5.1 / 4.2 / 2.9 / 3.5 % | 6.2 / 3.4 / 2.4 / 4.2 % |
 
 \* Fuera de la distribución de entrenamiento y de validación.
 
-Con la capa, SAC completa más tareas que DWA en todos los escenarios menos E6 (empate) y
-mantiene la puntualidad que tenía sin ella. Choca con operarios casi tan poco como DWA,
-pero todavía roza más y deja caer más cargas (7 % frente a < 2 %): la capa evita choques,
-no las aceleraciones bruscas que desestabilizan la carga. Con la capa, DWA también mejora
-(E5: 94.5 % completadas, ver `docs/RESULTADOS.md`). `models/sac_v10.pt` y
+Con la misma capa, SAC v14 completa tanto como DWA (más en todos los escenarios salvo E5,
+con 1.7 puntos menos), entrega a tiempo igual o más y tarda menos por entrega, con un número parecido de
+choques graves con operarios. Sigue rozando más y dejando caer más cargas (3–5 % frente a
+< 2 %). Sin capa, la línea base A* + DWA completaba 87 % en E5 y el v12 89 % con 5 choques
+graves con operarios (ver `docs/RESULTADOS.md`). `models/sac_v12.pt`, `models/sac_v10.pt` y
 `models/sac_v9.pt` quedan como modelos anteriores (el v9, antes de corregir la recompensa,
 completaba 32 % en E5).
 

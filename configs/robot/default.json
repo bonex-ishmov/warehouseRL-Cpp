@@ -48,7 +48,7 @@
   // reproduce el comportamiento con el que se entrenaron los modelos hasta el v13.
   "shield": {
     "enabled": true, "decel": 1.0, "marginWorker": 0.4, "marginForklift": 0.2,
-    "marginStatic": 0.1, "lookahead": 1.0, "range": 3.0
+    "marginStatic": 0.1, "lookahead": 1.0, "range": 3.0, "loadLateralFraction": 0.7
   },
   "map": {
     "procedural": { "width": 24, "height": 24, "aisleWidth": 2.6, "shelfDepth": 1.0,

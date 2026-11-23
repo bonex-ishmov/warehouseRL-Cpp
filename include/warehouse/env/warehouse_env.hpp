@@ -40,6 +40,8 @@ struct StepEvents {
     float collisionPenalty = 0.0f;  ///< castigo total de los choques del paso (según gravedad, operario y culpa)
     int workerSevere = 0;
     int loadDrops = 0;
+    Vec2 loadDropAccel;   ///< aceleración (marco del robot, filtrada) que tiró la carga
+    int loadDropType = -1;
     int criticalOverdue = 0;
     int restrictedEntries = 0;
     int rechargesStarted = 0;

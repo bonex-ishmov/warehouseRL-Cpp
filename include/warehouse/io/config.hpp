@@ -128,6 +128,10 @@ struct RewardParams {
     float safetyLookahead = 1.0f;      ///< s de avance del obstáculo que se descuentan
     float workerCollisionScale = 2.0f; ///< roces y choques leves con operarios cuestan esto veces más
     float collisionNoFaultScale = 0.25f; ///< choque con un obstáculo móvil estando el robot parado o alejándose
+    /// Cada segundo en que la capa de seguridad recorta la consigna, por la distancia entre
+    /// la pedida y la ejecutada (normalizadas). Sin esto, al entrenar con la capa, pedir
+    /// algo inseguro sale gratis y el crítico ve igual todo lo que la capa recorta a lo mismo.
+    float shieldInterventionPerSecond = 0.0f;
     float staticCollisionScale = 1.0f;   ///< choques leves y graves contra muros y estanterías (el v13 probó 1.5)
     float grazeSpeed = 0.2f;   ///< por debajo: roce
     float severeSpeed = 0.8f;  ///< por encima: grave
@@ -215,6 +219,9 @@ struct ShieldParams {
     float marginStatic = 0.1f;
     float lookahead = 1.0f;       ///< s de avance del obstáculo hacia el robot que se descuentan
     float range = 3.0f;           ///< m: más allá no se puede superar la velocidad segura
+    /// Con carga, |v·giro| (aceleración lateral en curva) no supera esta fracción del
+    /// límite lateral de la carga. 0 lo desactiva.
+    float loadLateralFraction = 0.7f;
 };
 
 struct ScenarioConfig {

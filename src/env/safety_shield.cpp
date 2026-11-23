@@ -18,9 +18,36 @@ float SafetyShield::allowedClosing(float room, float decel, float controlDt) {
 
 SafetyShield::Result SafetyShield::filter(const ShieldParams& p, const RobotParams& rp, const WarehouseMap& map,
                                           const std::vector<DynamicObstacle>& obstacles, Pose pose, float v, float w,
-                                          float controlDt) const {
-    Result out{v, w, false};
-    if (!p.enabled) return out;
+                                          float controlDt, float vNow, float loadLateralLimit) const {
+    if (!p.enabled) return {v, w, false, false};
+    Result out = avoidObstacles(p, rp, map, obstacles, pose, v, w, controlDt);
+
+    // Carga: en curva la aceleración lateral es v·giro. La mayoría de las caídas sin
+    // choque eran por cerrar la curva o acelerar en ella. Se escalan avance y giro juntos
+    // (se conserva la curva pedida y, como las restricciones de obstáculos son lineales
+    // con cota >= 0, siguen cumpliéndose). Cuenta también la velocidad actual: la rampa
+    // tarda en frenar, y mientras tanto el giro ya habría subido.
+    const float limit = p.loadLateralFraction * loadLateralLimit;
+    if (limit > 0.0f && std::abs(out.w) > 1e-3f) {
+        auto lateral = [&](float t) { return t * std::abs(out.w) * std::max(std::abs(vNow), t * std::abs(out.v)); };
+        if (lateral(1.0f) > limit) {
+            float lo = 0.0f, hi = 1.0f;
+            for (int i = 0; i < 20; ++i) {
+                const float mid = 0.5f * (lo + hi);
+                (lateral(mid) <= limit ? lo : hi) = mid;
+            }
+            out.v *= lo;
+            out.w *= lo;
+            out.limited = out.loadLimited = true;
+        }
+    }
+    return out;
+}
+
+SafetyShield::Result SafetyShield::avoidObstacles(const ShieldParams& p, const RobotParams& rp, const WarehouseMap& map,
+                                                  const std::vector<DynamicObstacle>& obstacles, Pose pose, float v,
+                                                  float w, float controlDt) const {
+    Result out{v, w, false, false};
 
     const Vec2 heading = fromAngle(pose.theta);
     const b2Vec2 robotPts[4] = {{-rp.halfLength, -rp.halfWidth}, {rp.halfLength, -rp.halfWidth},

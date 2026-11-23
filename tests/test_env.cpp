@@ -224,6 +224,23 @@ TEST(CapaSeguridad, FrenaAntesDeLaEstanteria) {
     EXPECT_GT(env.metrics().shieldTime, 0.0);
 }
 
+// Al entrenar con la capa, lo que ella recorta cuesta: misma consigna contra la estantería,
+// menos recompensa con shieldInterventionPerSecond < 0.
+TEST(CapaSeguridad, RecortarLaConsignaCuesta) {
+    auto run = [](float perSecond) {
+        auto cfg = test::smallScenario();
+        cfg.map.robotStart = Pose{{3.0f, 5.0f}, 0.0f};
+        cfg.shield.enabled = true;
+        cfg.reward.shieldInterventionPerSecond = perSecond;
+        WarehouseEnv env(cfg);
+        env.reset(1);
+        double total = 0.0;
+        for (int i = 0; i < 60; ++i) total += env.step({1.0f, 0.0f}).reward;
+        return total;
+    };
+    EXPECT_LT(run(-2.0f), run(0.0f) - 1.0);
+}
+
 // Sin nada cerca la capa no toca la consigna, y la velocidad permitida crece con el hueco.
 TEST(CapaSeguridad, NoIntervieneEnEspacioLibre) {
     EXPECT_FLOAT_EQ(SafetyShield::allowedClosing(0.0f, 1.0f, 0.1f), 0.0f);
