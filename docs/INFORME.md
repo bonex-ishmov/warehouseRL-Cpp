@@ -16,16 +16,17 @@ Repositorio: <https://github.com/bonex-ishmov/warehouseRL-Cpp>
 5. [Entorno de aprendizaje](#5-entorno-de-aprendizaje)
 6. [Agente](#6-agente)
 7. [Entrenamiento](#7-entrenamiento)
-8. [Capa de seguridad](#8-capa-de-seguridad)
-9. [Rendimiento y optimización para el hardware](#9-rendimiento-y-optimización-para-el-hardware)
-10. [Historia del desarrollo y decisiones](#10-historia-del-desarrollo-y-decisiones)
-11. [Resultados](#11-resultados)
-12. [Criterios de aceptación de la propuesta](#12-criterios-de-aceptación-de-la-propuesta)
-13. [Herramientas de diagnóstico y visualización](#13-herramientas-de-diagnóstico-y-visualización)
-14. [Pruebas y reproducibilidad](#14-pruebas-y-reproducibilidad)
-15. [Diferencias con la propuesta](#15-diferencias-con-la-propuesta)
-16. [Limitaciones y trabajo futuro](#16-limitaciones-y-trabajo-futuro)
-17. [Cómo reproducir los resultados](#17-cómo-reproducir-los-resultados)
+8. [El entrenamiento por dentro](#8-el-entrenamiento-por-dentro)
+9. [Capa de seguridad](#9-capa-de-seguridad)
+10. [Rendimiento y optimización para el hardware](#10-rendimiento-y-optimización-para-el-hardware)
+11. [Historia del desarrollo y decisiones](#11-historia-del-desarrollo-y-decisiones)
+12. [Resultados](#12-resultados)
+13. [Criterios de aceptación de la propuesta](#13-criterios-de-aceptación-de-la-propuesta)
+14. [Herramientas de diagnóstico y visualización](#14-herramientas-de-diagnóstico-y-visualización)
+15. [Pruebas y reproducibilidad](#15-pruebas-y-reproducibilidad)
+16. [Diferencias con la propuesta](#16-diferencias-con-la-propuesta)
+17. [Limitaciones y trabajo futuro](#17-limitaciones-y-trabajo-futuro)
+18. [Cómo reproducir los resultados](#18-cómo-reproducir-los-resultados)
 - [Anexo A. Métricas completas por escenario](#anexo-a-métricas-completas-por-escenario)
 - [Anexo B. Parámetros principales](#anexo-b-parámetros-principales)
 
@@ -334,7 +335,7 @@ Un episodio termina en uno de estos casos:
 | Alto | Qué hacer: siguiente tarea, recargar o esperar | `TaskSelector`: puntúa las tareas por prioridad, urgencia del plazo y distancia, y reserva energía para llegar a una estación tras la entrega. Las tareas críticas desplazan a las aún no recogidas. |
 | Medio | Por dónde ir | A\* sobre el mapa de ocupación inflado (0.55 m) con costo por cercanía a obstáculos, ruta suavizada, replanificación cada 2 s o al salirse 1.5 m |
 | Bajo | Cómo moverse | SAC: velocidad lineal y angular a 10 Hz. Sigue el punto de paso como guía, pero decide libremente la trayectoria, la velocidad y las maniobras |
-| Seguridad | Qué no se permite | `SafetyShield`: recorta la orden antes de los motores (sección 8) |
+| Seguridad | Qué no se permite | `SafetyShield`: recorta la orden antes de los motores (sección 9) |
 
 El mapa de ocupación existe solo para planificar: el robot nunca se mueve sobre la cuadrícula.
 
@@ -362,6 +363,9 @@ fue necesario.
 ---
 
 ## 7. Entrenamiento
+
+Esta sección resume cómo se organiza el entrenamiento; la sección 8 explica su funcionamiento técnico
+(bucle, SAC, memoria de repetición, CUDA Graph, generador y validación) con detalle.
 
 ### 7.1 Generador de escenarios y currículo adaptativo
 
@@ -429,7 +433,344 @@ de antemano.
 
 ---
 
-## 8. Capa de seguridad
+## 8. El entrenamiento por dentro
+
+Esta sección describe qué hace `wrl_train` (`apps/train.cpp`) paso a paso y cómo está implementado SAC
+(`src/agent/sac.cpp`), con los números de una corrida típica.
+
+### 8.1 Formulación
+
+El problema es un proceso de decisión de Markov parcialmente observable:
+- **Observación:** el vector de 86 valores de la sección 5.1.
+- **Acción:** a ∈ [−1, 1]², velocidad lineal y angular deseadas.
+- **Frecuencia:** el agente decide a 10 Hz y entre dos decisiones pasan 6 pasos físicos.
+
+Cada decisión produce una transición (s, a, r, s′, d):
+
+| Componente | Qué es |
+|---|---|
+| s′ | Observación siguiente. Si el episodio terminó, es la **observación final**, antes del reinicio automático del entorno. |
+| r | Recompensa acumulada en los 6 pasos físicos (sección 5.3). |
+| d = 1 | Solo si el episodio **terminó de verdad**: cola completada, batería agotada, choque grave con un operario, límite de choques o estancamiento. |
+| d = 0 al cortar por tiempo máximo | Es un **truncamiento**: el estado siguiente no es terminal y el objetivo del crítico sigue usando su valor. Tratarlo como terminal enseñaría al agente que el tiempo máximo es parte del problema. |
+
+**Horizonte efectivo.** Con γ = 0.99 por decisión, el horizonte es 1/(1 − γ) = 100 decisiones, es decir,
+unos 10 s de simulación. Los objetivos más lejanos, como una entrega a varios minutos o un plazo, le llegan
+al agente de dos formas:
+- el **término de progreso**, Φ(s) = −1 · (metros de ruta A\* que faltan), que suma Φ(s′) − Φ(s) en cada
+  paso;
+- las variables que anticipan el futuro en la observación (holgura del plazo, batería, temporizador de
+  estancamiento).
+
+El término de progreso no se suma en el paso en que la ruta se replanifica, porque la nueva ruta cambia el
+potencial sin que el robot se haya movido. Se aplica sin el factor γ (γ·Φ(s′) − Φ(s) en la forma de Ng et
+al.), una aproximación habitual con γ cercano a 1.
+
+**Escala de la recompensa.** Las recompensas se multiplican por 0.1 antes de entrar al crítico: una entrega
+a tiempo (+100) vale 10 en las unidades de Q. Así los valores de Q quedan en un rango en el que la
+temperatura α y las tasas de aprendizaje por defecto de SAC funcionan.
+
+### 8.2 Una iteración del bucle
+
+Hay 24 entornos en paralelo y en cada iteración todos avanzan un paso. Una iteración produce 24
+transiciones y encola 24 × 0.25 = 6 actualizaciones de SAC:
+
+```
+CPU (hilo principal + 5 hilos de simulación)          GPU (un stream)
+─────────────────────────────────────────────          ─────────────────────────────────────
+1. copiar las 24 observaciones a memoria fijada  ───►  copia asíncrona CPU→GPU
+2. actor estocástico en lote (24 × 86 → 24 × 2)  ───►  inferencia
+   copiar las acciones de vuelta  ◄── espera ───────  (aquí la CPU espera a todo lo encolado)
+3. encolar 6 actualizaciones (6 × CUDA Graph)    ───►  6 × [muestrear 512, crítico, actor, α, Polyak]
+4. avanzar los 24 entornos en 6 hilos                   ... la GPU trabaja mientras tanto ...
+   (capa de seguridad, 6 pasos físicos, tareas,
+    recompensa, LiDAR, observación; reinicio
+    automático de los que terminaron)
+5. empaquetar r, d y s′ en memoria fijada        ───►  copia asíncrona y escritura circular en la memoria
+6. currículo: informar los episodios terminados
+7. cada 10 000 transiciones, registro; cada 200 000, punto de control; cada 400 000, validación
+```
+
+La única sincronización por iteración está en el paso 2: copiar las acciones a la CPU obliga a esperar a que
+la GPU termine las 6 actualizaciones de la iteración anterior. Por eso el desglose que imprime `wrl_train`
+muestra ~90 % del tiempo en "acciones + espera GPU" y ~8 % en simulación. La GPU es el límite, y con ella la
+duración de cada actualización (~1.3 ms con lote de 512).
+
+Detalles de implementación:
+- **Memoria fijada (*pinned*):** las observaciones, acciones, recompensas y banderas pasan por buffers de
+  este tipo, lo que permite copias asíncronas.
+- **Buffers alternos:** los de s′, r y d se alternan en dos juegos (paridad), para que escribir los de un
+  paso nunca pise una copia anterior que la GPU aún no haya leído.
+- **Hilos:** Torch usa un solo hilo de CPU cuando entrena en GPU, para no competir con los 6 de
+  simulación, uno por núcleo físico.
+
+### 8.3 Entornos en paralelo (`VecEnv`)
+
+`VecEnv` (`src/env/vec_env.cpp`) mantiene los 24 `WarehouseEnv`, cada uno con su propio mundo Box2D.
+- **Reparto del trabajo:** el hilo principal y 5 auxiliares se sincronizan con dos `std::barrier`
+  (inicio y fin). El entorno i lo avanza siempre el hilo i mod 6, sin colas ni bloqueos.
+- **Sin estado compartido entre entornos:** cada uno tiene su generador aleatorio y sus buffers. Lo único
+  compartido es el registro global de mundos de Box2D, que no es seguro entre hilos. Crear y destruir
+  mundos se protege con un mutex, y como Box2D admite 128 mundos, `VecEnv` limita a 100 entornos.
+- **Reinicio automático:** al terminar un episodio, el entorno guarda la observación final y sus métricas y
+  se reinicia dentro del mismo paso. El bucle recibe la observación inicial del episodio nuevo como
+  observación actual, y la final para la transición.
+- **Semillas reproducibles:** el episodio k del entorno i usa la semilla `mixSeed(semilla, i·1 000 003 + k)`.
+  Con la misma semilla de entrenamiento, la secuencia de escenarios es la misma.
+
+### 8.4 Dentro de un paso del entorno
+
+`WarehouseEnv::step` (`src/env/warehouse_env.cpp`) hace, en este orden:
+
+1. **Acción:** recorta a [−1, 1], cambia NaN por 0 y la escala a consignas (v ∈ [−0.3, 1.5] m/s,
+   ω ∈ [−2, 2] rad/s).
+2. **Capa de seguridad** (si está activa, sección 9): recorta la consigna. La transición guarda la acción que
+   pidió la política, no la ejecutada.
+3. **Seis pasos físicos de 1/60 s.** En cada uno:
+   - avanzan los obstáculos móviles;
+   - la rampa acerca la consigna (1.2 m/s², 4 rad/s²);
+   - el modelo del robot convierte la consigna en fuerzas por rueda, limitadas por el motor y la
+     adherencia;
+   - Box2D avanza con 4 subpasos;
+   - se integra la batería;
+   - se filtra la aceleración que siente la carga y se comprueba su límite;
+   - los contactos nuevos se clasifican por gravedad y culpa (sección 5.3);
+   - se actualiza el acoplamiento (recoger, entregar, recargar).
+4. **Nivel alto:** llegadas de tareas, tareas críticas que desplazan a otras, vigilancia de la batería y, si
+   hace falta, una nueva decisión del selector.
+5. **Recompensa:** progreso (diferencia de potencial), tiempo, energía, brusquedad, choques, velocidad
+   insegura, recortes de la capa, carga, retrasos, contacto, estancamiento.
+6. **Ruta:** replanificación con A\* cada 2 s o si el robot se aleja más de 1.5 m de la ruta.
+7. **Sensores y observación:** 36 rayos del LiDAR, percepción de los 3 obstáculos más cercanos con GJK, y la
+   observación de 86 valores.
+8. **Fin del episodio** y, si fracasó, −20 por cada tarea sin entregar.
+
+### 8.5 SAC: redes
+
+| Red | Arquitectura | Parámetros |
+|---|---|---|
+| Actor | 86 → 256 → 256 (ReLU) → media (2) y log σ (2) | 89 092 |
+| Críticos (2, fusionados) | (86 + 2) → 256 → 256 (ReLU, LayerNorm sin parámetros tras cada capa oculta) → 1 | 2 × 88 833 |
+| Críticos objetivo | copia de los críticos, sin gradiente | 2 × 88 833 |
+
+**Críticos fusionados.** Los dos críticos son un "conjunto" de 2 redes en un mismo módulo
+(`EnsembleLinear`). Cada capa guarda los pesos como un tensor W de forma [2, entradas, salidas] y se evalúa
+con un único `baddbmm` para los dos. Así Q₁ y Q₂ cuestan una sola cadena de operaciones en la GPU, en vez de
+dos.
+
+El modelo guardado contiene actor, críticos, críticos objetivo y log α. Pesa ~1.8 MB: 444 000 parámetros en
+float32.
+
+**Política gaussiana con compresión tanh.**
+
+```
+(μ, log σ) = actor(s),   log σ recortado a [−5, 2]
+u = μ + σ·ε,  ε ~ N(0, I)          (truco de reparametrización)
+a = tanh(u)
+log π(a|s) = Σᵢ [ log N(uᵢ; μᵢ, σᵢ) − log(1 − tanh²(uᵢ)) ]
+           con log(1 − tanh²u) = 2·(log 2 − u − softplus(−2u))   (forma numéricamente estable)
+```
+
+Al evaluar se usa la acción determinista a = tanh(μ).
+
+### 8.6 SAC: una actualización
+
+Cada actualización toma un lote de B = 512 transiciones y hace, en este orden (`SacAgent::update`):
+
+**1. Crítico** (doble Q recortada):
+
+```
+a′ ~ π(·|s′)
+y  = 0.1·r + γ·(1 − d)·( min_j Q̄_j(s′, a′) − α·log π(a′|s′) )        (sin gradiente)
+L_Q = Σ_j  media_B ( Q_j(s, a) − y )²
+```
+
+Usar el mínimo de los dos críticos objetivo frena la sobreestimación de Q. El término −α·log π añade al
+objetivo la entropía esperada de la política (el "soft" de SAC).
+
+**2. Actor.** Mientras se calcula, los pesos de los críticos se congelan, para no acumular gradientes que no
+se usarán:
+
+```
+ã ~ π(·|s)  (reparametrizado, el gradiente pasa por ã)
+L_π = media_B ( α·log π(ã|s) − min_j Q_j(s, ã) )
+```
+
+**3. Temperatura** (ajuste automático de la entropía):
+
+```
+L_α = −media_B ( log α · (log π(ã|s) + H̄) ),   H̄ = −2 = −dim(acción)
+log α ← máx(log α, log 0.003)
+```
+
+Si la entropía de la política cae por debajo de H̄, α sube y premia explorar; si la supera, baja. El piso
+α ≥ 0.003 impide que la exploración muera del todo. En las corridas largas α termina en ese piso y la
+entropía en torno a −0.5.
+
+**4. Redes objetivo** (Polyak):
+
+```
+θ̄ ← (1 − τ)·θ̄ + τ·θ,   τ = 0.005
+```
+
+Se hace con dos operaciones `_foreach` sobre todos los tensores a la vez.
+
+**Optimizador.** Es un Adam propio (`ForeachAdam`), uno por red y otro para log α:
+- tasa 3·10⁻⁴, β₁ = 0.9, β₂ = 0.999;
+- recorte del gradiente por norma global a 5 para actor y crítico;
+- la norma, el recorte, el contador de pasos y la corrección de sesgo se calculan en la GPU con operaciones
+  `_foreach`, sin leer ningún escalar desde la CPU. Esto hace falta para poder capturarlo en un CUDA Graph,
+  y reduce las ~7 operaciones por tensor de `torch::optim::Adam` a unas pocas para todos los tensores juntos.
+
+### 8.7 Memoria de repetición en la GPU
+
+`ReplayBuffer` (`src/agent/replay_buffer.cpp`) reserva al inicio cinco tensores en la GPU:
+
+| Tensor | Forma |
+|---|---|
+| s | [1 000 000, 86] |
+| s′ | [1 000 000, 86] |
+| a | [1 000 000, 2] |
+| r | [1 000 000, 1] |
+| d | [1 000 000, 1] |
+
+En total son 1 M × 176 floats × 4 bytes = 704 MB.
+- **Escritura:** circular, por bloques contiguos, sin pasar por la CPU.
+- **Muestreo uniforme en la GPU:** i = ⌊U(0, 1) · tamaño⌋, donde el tamaño actual vive también en un tensor
+  de la GPU. El CUDA Graph capturado lee el tamaño de verdad en cada reproducción, en vez de quedarse con el
+  valor que tenía el día de la captura.
+
+Con 0.25 actualizaciones por transición y lotes de 512, cada transición se muestrea en promedio
+0.25 × 512 = **128 veces** mientras está en la memoria. Como la memoria se renueva cada 1 M transiciones
+(unos 6 minutos), una transición vieja deja de usarse a los ~6 minutos. Esto es lo que hacía inevitable el
+olvido con el currículo por etapas.
+
+### 8.8 CUDA Graph
+
+Con redes de este tamaño, cada actualización lanza cientos de kernels pequeños, y lanzarlos costaba ~2.1 ms
+de CPU, más que calcularlos.
+
+**Captura.** La primera vez que se pide una actualización con CUDA disponible (`captureGraph`):
+1. se pasa a un stream secundario y se hacen 3 actualizaciones normales, para que se reserven las memorias y
+   se inicialicen los kernels perezosos;
+2. se captura una actualización completa: el muestreo de la memoria (números aleatorios e índices), crítico,
+   actor, α, Adam y Polyak.
+
+Desde entonces cada actualización es un único `graph->replay()`.
+
+**Condiciones que el código cumple para que funcione:**
+- ninguna lectura de escalares a la CPU dentro de la actualización (nada de `.item()`);
+- el contador de pasos de Adam está en la GPU;
+- todos los tensores tienen direcciones fijas: la memoria de repetición se reserva una vez y se escribe en
+  su sitio;
+- las pérdidas salen en tensores fijos del grafo y solo se leen al imprimir el registro, cada 10 000
+  transiciones.
+
+Si la captura falla, el entrenamiento sigue sin grafo.
+
+**Resultado:** junto con los críticos fusionados y el Adam `_foreach`, pasó de 380 a 830 actualizaciones/s.
+Con TF32 en las multiplicaciones, el entrenamiento completo corre a ~2 900 transiciones/s.
+
+### 8.9 Un escenario nuevo en cada episodio
+
+Cuando un entorno se reinicia, el hilo de simulación que lo avanza llama al proveedor de escenarios:
+
+1. `AdaptiveCurriculum::sample` sortea la dificultad de las seis dimensiones con un generador aleatorio
+   derivado de la semilla del episodio. Solo lee los niveles, así que se puede llamar desde varios hilos a
+   la vez.
+2. `ScenarioGenerator::generate(dificultad, semilla)` construye la configuración del almacén. El resultado
+   es determinista para cada par (dificultad, semilla).
+
+Algunas de las reglas, en función del nivel *x* de cada dimensión:
+
+| Dimensión | Regla |
+|---|---|
+| Mapa | Lado de 18 a 28 m (± 2). Pasillos de 2.9 a 2.5 m, nunca menos de 2·0.55 + 1.2 = 2.3 m (inflado del robot a cada lado más 1.2 m libres). Estanterías de 3.5 a 7 m. |
+| Tareas | 1 + 14·x·U(0.5, 1) tareas. Plazos desde x = 0.35, con holgura de 3.5 a 2.0 veces el tiempo estimado. Llegadas no más rápidas que 0.9 veces el tiempo de servicio (0.7 en lo más difícil). Tareas críticas desde x = 0.4. |
+| Energía | Batería desde 25 Wh hasta el mínimo seguro: la energía para 2.2 diagonales con la carga más pesada dividida por (1 − reserva − 5 %). La carga inicial siempre alcanza para llegar a un cargador. |
+| Cargas | Se habilitan en orden: liviana (x ≥ 0), media (0.25), pesada (0.5), frágil (0.75). |
+| Obstáculos | Hasta mín(7, área / 80 m²) · x obstáculos, a 0.4–0.6 … 0.7–1.1 m/s. |
+| Terreno | Hasta 3 zonas resbaladizas con μ que baja de 0.6 a 0.3. Zona restringida desde x = 0.5. Aleatorización de fricción ±5–30 %, masa ±5–15 %, motores ±5–10 %, ruido del LiDAR hasta 0.05 m. |
+
+**Cómo se ajustan los niveles.** Como el entorno se reinicia dentro de su propio paso, el bucle guarda dos
+sorteos por entorno: el del episodio que acaba de terminar y el del siguiente. Cuando termina un episodio
+que empujaba una dimensión (de frontera), su resultado se informa al currículo desde el hilo principal:
+
+```
+puntaje = fracción de tareas entregadas
+          × 0.5 si terminó en fracaso (choque con operario, límite de choques, estancamiento, batería)
+          × 0.8 si tuvo algún choque leve o grave
+```
+
+Cada 24 episodios de frontera de una misma dimensión se calcula su puntaje medio. Si es ≥ 0.75 el nivel
+sube 0.05; si es < 0.35, baja 0.05. Los episodios del calentamiento no cuentan.
+
+Los niveles se guardan en `curriculo.json` con cada punto de control, para poder reanudar.
+
+### 8.10 Calentamiento, validación y archivos
+
+**Calentamiento.** Durante las primeras 20 000 transiciones, las acciones las da A\* + DWA con ruido gaussiano
+(σ = 0.3 en cada componente). Las actualizaciones empiezan cuando la memoria tiene 5 000 transiciones. Así
+el crítico ve desde el principio episodios en los que se entregan tareas, algo que una política aleatoria
+casi nunca consigue.
+
+Al afinar (`warmupPolicy: "actor"`), el calentamiento usa el propio modelo cargado.
+
+**Validación** (cada 400 000 transiciones, ~30 s):
+- crea un `VecEnv` aparte con 50 entornos (E1–E5 × 10) y una semilla fija, siempre la misma;
+- corre la política determinista hasta que termina el primer episodio de cada entorno;
+- calcula el puntaje de la sección 7.2 y guarda `mejor_validacion.pt` si lo mejora (en empate, gana el más
+  puntual).
+
+Al reanudar, el modelo de partida se valida antes de empezar.
+
+**Archivos de una corrida** (`runs/<nombre>/`):
+
+| Archivo | Contenido |
+|---|---|
+| `config.json` | Configuración completa ya fusionada |
+| `train_log.csv` | Cada 10 000 transiciones: niveles del currículo, episodios, retorno medio, tasa de completadas, choques, incidentes de carga, pérdidas del crítico y del actor, α, entropía, transiciones/s, actualizaciones/s |
+| `validacion.csv` | Cada validación: puntaje, completadas, a tiempo, seguridad, puntaje por escenario, si fue el mejor |
+| `checkpoint.pt` + `curriculo.json` | Cada 200 000 transiciones |
+| `mejor_validacion.pt` | El modelo elegido |
+| `sac_final.pt` | El último |
+
+Ctrl+C detiene el entrenamiento ordenadamente: guarda el modelo final y valida.
+
+`--resume` carga actor, críticos, críticos objetivo y α, y los niveles del currículo. No carga los momentos
+de Adam ni la memoria de repetición: el afinado empieza con la memoria vacía.
+
+### 8.11 Entrenar con la capa de seguridad
+
+Con `sac_capa.json`, cada entorno aplica la capa entre la acción del actor y los motores (paso 2 de la
+sección 8.4). Tres consecuencias técnicas:
+
+- **Acción guardada.** La memoria guarda la acción pedida. Para el entorno, la capa forma parte de la
+  dinámica: pedir (1.5 m/s hacia una estantería) y pedir (0.4 m/s) pueden producir exactamente la misma
+  transición.
+- **Por qué hace falta el castigo por recortes.** Sin él, Q(s, a) sería plana en toda la región de acciones
+  que la capa recorta a lo mismo. El gradiente ∂Q/∂a con el que aprende el actor sería cero ahí, y nada
+  impediría que la política se fuera a los extremos.
+  - Con −2 · ‖a_pedida − a_ejecutada‖ · Δt (normalizadas), Q baja a medida que la acción pedida se aleja de
+    lo permitido, y el gradiente empuja al actor hacia acciones que la capa no necesita tocar.
+- **Validación con la capa activa**, igual que la evaluación.
+
+### 8.12 Números de una corrida
+
+| | Corrida completa (v12) | Afinado (v14) |
+|---|---|---|
+| Transiciones | 15 000 000 | 4 000 000 |
+| Iteraciones del bucle (24 transiciones cada una) | 625 000 | ~167 000 |
+| Actualizaciones de SAC (lote de 512) | 3 750 000 | 1 000 000 |
+| Transiciones muestreadas para entrenar | ~1 920 millones | ~512 millones |
+| Validaciones | 38 | 11 (incluida la del modelo de partida) |
+| Ritmo | ~2 900 transiciones/s, ~730 actualizaciones/s | ~2 700 transiciones/s |
+| Duración | ~90 min | 28 min |
+| Memoria en la GPU | ~0.7 GB la memoria de repetición más redes, Adam y grafo | igual |
+
+---
+
+## 9. Capa de seguridad
 
 `SafetyShield` (`src/env/safety_shield.cpp`) se sitúa entre la política y los motores, como el escáner de
 seguridad de un AGV. No decide la ruta ni frena más fuerte que la rampa de los motores; solo recorta la
@@ -471,7 +812,7 @@ lateral de esa carga:
 | Entregas a tiempo, E5 | 47.9 % | 48.9 % | 49.1 % |
 
 El límite lateral cuesta tareas completadas en E5 a un modelo que no aprendió a girar más suave; el
-afinado del v14 (sección 10) se entrenó ya con él.
+afinado del v14 (sección 11) se entrenó ya con él.
 
 **Dónde está activa:**
 - en evaluación y en la interfaz, activada por defecto (`configs/robot/default.json`, `"shield"`);
@@ -485,7 +826,7 @@ E5, es decir, ~6 % del tiempo.
 
 ---
 
-## 9. Rendimiento y optimización para el hardware
+## 10. Rendimiento y optimización para el hardware
 
 Equipo: AMD Ryzen 5 6600H (6 núcleos / 12 hilos, AVX2), 14 GB de RAM, NVIDIA RTX 3050 Laptop de 4 GB,
 Fedora 44, GCC 16.
@@ -522,9 +863,9 @@ núcleo que espera a la GPU (CPU de 104 % a 25 %), pero es un 2.6 % más lenta; 
 
 ---
 
-## 10. Historia del desarrollo y decisiones
+## 11. Historia del desarrollo y decisiones
 
-### 10.1 Versiones del modelo
+### 11.1 Versiones del modelo
 
 Tareas completadas en E5 (combinado) y choques graves con operarios en E4–E7 (400 episodios), siempre sin
 capa salvo donde se indica:
@@ -544,7 +885,7 @@ capa salvo donde se indica:
 La fila v2–v7 viene de la evaluación de entonces; las demás, de las evaluaciones con el código actual. Las
 cifras de v8 y v9 son de su propio entorno (77 observaciones antes del v11).
 
-### 10.2 Decisiones y su justificación
+### 11.2 Decisiones y su justificación
 
 **Física continua en vez de cuadrícula.** Fue una petición expresa antes de empezar: el movimiento debía ser
 libre y la física debía afectar de verdad al modelo. Por eso la propuesta se reescribió como v2. Sin
@@ -635,9 +976,9 @@ capa.
 
 ---
 
-## 11. Resultados
+## 12. Resultados
 
-### 11.1 Método
+### 12.1 Método
 
 - `wrl_evaluate` ejecuta la política sin exploración en 100 episodios por escenario, 20 en cada una de 5
   semillas de evaluación disjuntas de las de entrenamiento y validación.
@@ -646,7 +987,7 @@ capa.
 - Los choques graves con operarios son el total en los 100 episodios.
 - Las tablas completas por escenario y métrica están en el Anexo A y en `docs/RESULTADOS.md`.
 
-### 11.2 Configuración entregada frente a la línea base
+### 12.2 Configuración entregada frente a la línea base
 
 | Escenario | Completadas DWA + capa | Completadas SAC v14 + capa | A tiempo DWA + capa | A tiempo SAC v14 + capa | Tiempo por entrega DWA / SAC |
 |---|---|---|---|---|---|
@@ -679,7 +1020,7 @@ Lectura:
   doble o el triple, deja caer 2–3 veces más cargas y gasta ~45 % más energía por entrega en E5–E7. Su
   conducción es mucho menos suave: brusquedad media de 0.33–0.52 frente a 0.05–0.07 de DWA.
 
-### 11.3 Efecto de la capa de seguridad
+### 12.3 Efecto de la capa de seguridad
 
 | E5 combinado | Completadas | A tiempo | Graves con operario | Roces/ep | Caídas de carga |
 |---|---|---|---|---|---|
@@ -702,14 +1043,14 @@ recupera la puntualidad que el v12 había perdido.
 Aprendió que la capa le limita las curvas y las frenadas. Solo debe usarse con la capa activada, que es como
 viene configurado.
 
-### 11.4 Rendimiento de simulación
+### 12.4 Rendimiento de simulación
 
 La meta de la propuesta era 2 000 pasos de control por segundo y por entorno. Se alcanzan ~24 000 con un
 entorno y ~80 000 con 96 entornos en 12 hilos.
 
 ---
 
-## 12. Criterios de aceptación de la propuesta
+## 13. Criterios de aceptación de la propuesta
 
 Sección 10.3 de la propuesta, evaluados con la configuración entregada (SAC v14 + capa), con A\* + DWA + capa
 como referencia:
@@ -739,7 +1080,7 @@ Se cumplen 8 de 12 criterios por completo y 2 en parte. Los incumplidos son:
 
 ---
 
-## 13. Herramientas de diagnóstico y visualización
+## 14. Herramientas de diagnóstico y visualización
 
 - **`wrl_gui`:** hasta 6 agentes en el mismo episodio (misma semilla) en mundos separados.
   - Muestra robot, ruedas, carga con su estrés, intención de la política (la curva que seguiría en 1.5 s),
@@ -754,7 +1095,7 @@ Se cumplen 8 de 12 criterios por completo y 2 en parte. Los incumplidos son:
   robot frenaba o retrocedía, y qué percibía un segundo antes (rayos del LiDAR que lo tocaban, si estaba
   en la observación o tapado). Para los choques con lo estático añade giro, adherencia y distancia al
   objetivo. Para cada caída de carga registra la aceleración que la causó, velocidad × giro y si coincidió
-  con un choque. Casi todas las decisiones de las secciones 8 y 10 salieron de aquí.
+  con un choque. Casi todas las decisiones de las secciones 9 y 11 salieron de aquí.
 - **`wrl_evaluate` + `tools/reporte.py` + `tools/comparar.py`:** CSV por episodio (incluidos
   `inseguro_*_s` y `escudo_s`), resumen con criterios, trazas reproducibles y tablas comparativas.
 - **Desglose de tiempo en `wrl_train`:** porcentaje de cada iteración en acciones y espera de la GPU,
@@ -762,7 +1103,7 @@ Se cumplen 8 de 12 criterios por completo y 2 en parte. Los incumplidos son:
 
 ---
 
-## 14. Pruebas y reproducibilidad
+## 15. Pruebas y reproducibilidad
 
 64 pruebas GoogleTest en 8 grupos:
 
@@ -789,15 +1130,15 @@ ejecución en GitHub.
 
 ---
 
-## 15. Diferencias con la propuesta
+## 16. Diferencias con la propuesta
 
 | Propuesta | Implementación | Motivo |
 |---|---|---|
 | Selector de tareas aprendido (DQN) como extensión | Heurístico (modo híbrido) | El esfuerzo se dedicó al control y la seguridad |
 | Currículo por etapas con avance por desempeño | Generador por reglas y currículo adaptativo por dimensión | Las etapas producían olvido catastrófico |
 | Control directo de la velocidad deseada | Rampa de consigna de 1.2 m/s² y 4 rad/s² | Sin ella, las cargas frágiles se caían siempre |
-| Penalización de colisiones por gravedad | Además: según la culpa, velocidad insegura, contacto sostenido | Diagnóstico de choques (sección 10) |
-| — | Capa de seguridad entre la política y los motores | La seguridad solo aprendida no alcanzaba (sección 10) |
+| Penalización de colisiones por gravedad | Además: según la culpa, velocidad insegura, contacto sostenido | Diagnóstico de choques (sección 11) |
+| — | Capa de seguridad entre la política y los motores | La seguridad solo aprendida no alcanzaba (sección 11) |
 | Observación con LiDAR, velocidades, comando anterior, punto de paso y objetivo, batería, carga, fase, plazo y 3 obstáculos (posición y velocidad) | 86 valores: añade tipo de obstáculo, distancia entre superficies, acercamiento, estrés de la carga, derrape, temporizador de estancamiento | Incentivos ocultos y diagnóstico de choques |
 | Obstáculos que no ceden el paso | Se detienen si el robot está justo delante y cambian de ruta tras ~3 s | Evitar pasillos bloqueados indefinidamente |
 | Recarga con el robot detenido | Recarga tolerante a pequeños movimientos y robot frenado mientras carga | El robot no aprendía a recargar |
@@ -806,7 +1147,7 @@ ejecución en GitHub.
 
 ---
 
-## 16. Limitaciones y trabajo futuro
+## 17. Limitaciones y trabajo futuro
 
 **Limitaciones de los resultados**
 - **Una corrida de entrenamiento por versión.** No se midió la variación entre semillas de entrenamiento.
@@ -838,7 +1179,7 @@ ejecución en GitHub.
 
 ---
 
-## 17. Cómo reproducir los resultados
+## 18. Cómo reproducir los resultados
 
 ```bash
 # Compilar y probar
